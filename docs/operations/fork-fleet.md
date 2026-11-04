@@ -20,11 +20,14 @@ before the desktop, and running server versions must match before a completion
 receipt is written under `~/.t3/builds/<version>/fleet-complete.json`.
 Archive transfers retain partial data for resumption; SSH keepalive checks stop
 unresponsive connections instead of leaving a transfer hanging indefinitely.
+M5 uploads both runtime packages to J. M3 pulls its Mac package and the staging
+helper from J using its existing `j` SSH alias. Each final host verifies its
+archive SHA-256 before staging. M5 never sends the large package directly to M3.
 
-The first two Labs sidebar design options are enabled by default in the fork;
-the rollout also enables them in M5's existing desktop preferences. Other Labs
-capabilities retain their settings. Browser and mobile preferences can override
-the defaults on each device.
+Project folders are off by default because that beta layout disables thread
+dragging. Rebuilds preserve existing Labs choices. Use `--disable-project-folders`
+once to turn folders off in M5's existing desktop preferences during installation.
+Browser and mobile preferences can override the defaults on each device.
 
 Backups of the database, previous service definitions and M5 app/preferences are
 under `~/.t3/backups/fleet/<version>` on each host. Incomplete staging does not

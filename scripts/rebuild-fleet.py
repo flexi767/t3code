@@ -130,7 +130,33 @@ def ssh_route(host):
     return os.environ.get("T3CODE_FLEET_M3_SSH_HOST", host) if host == "m3" else host
 
 
-def rebuild(ver, upstream):
+def distribute(ver, archives):
+    helper = f"/tmp/t3-fleet-{ver}.py"
+    ssh_options = ["-o", "ConnectTimeout=8", "-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=3"]
+    transport = "ssh -o ConnectTimeout=8 -o ServerAliveInterval=10 -o ServerAliveCountMax=3"
+    run("scp", *ssh_options, __file__, f"{ssh_route('j')}:{helper}")
+    remote_archives = {}
+    for platform in ["linux-x64", "darwin-arm64"]:
+        destination = f"/tmp/t3-fleet-{ver}-{platform}.tar.gz"
+        run("rsync", "-a", "--partial", "--inplace", "-e", transport,
+            archives[platform], f"{ssh_route('j')}:{destination}")
+        remote_archives[platform] = destination
+    # M3 already trusts/authenticates to its `j` alias. Package bytes travel J -> M3.
+    for source in [helper, remote_archives["darwin-arm64"]]:
+        run("ssh", *ssh_options, ssh_route("m3"), shlex.join([
+            "rsync", "-a", "--partial", "--inplace", "-e", transport,
+            f"j:{source}", "/tmp/",
+        ]))
+    for host, platform in [("j", "linux-x64"), ("m3", "darwin-arm64")]:
+        expected = hashlib.file_digest(archives[platform].open("rb"), "sha256").hexdigest()
+        # Verify the archive again on the final host before extracting/installing it.
+        check = f"import hashlib; from pathlib import Path; assert hashlib.file_digest(Path({remote_archives[platform]!r}).open('rb'), 'sha256').hexdigest() == {expected!r}, 'Fleet archive checksum mismatch'"
+        run("ssh", *ssh_options, ssh_route(host), shlex.join(["python3", "-c", check]))
+        remote(host, helper, "host-stage", "--version", ver, "--archive", remote_archives[platform])
+    return helper
+
+
+def rebuild(ver, upstream, disable_project_folders=False):
     root = Path(__file__).resolve().parent.parent
     os.chdir(root)
     if output("git", "status", "--porcelain", "--untracked-files=normal"):
@@ -146,6 +172,8 @@ def rebuild(ver, upstream):
     idle()
     for host in ["m3", "j"]:
         run("ssh", "-o", "ConnectTimeout=8", ssh_route(host), "true")
+    run("ssh", "-o", "ConnectTimeout=8", ssh_route("m3"),
+        "ssh -o BatchMode=yes -o ConnectTimeout=8 j true")
     builds = Path.home() / ".t3/builds" / ver
     builds.mkdir(parents=True, exist_ok=True)
     base_version = upstream.removeprefix("v")
@@ -191,15 +219,7 @@ def rebuild(ver, upstream):
         with tarfile.open(archive, "w:gz") as tar:
             tar.add(content, arcname=f"t3-{ver}-{platform}")
         archives[platform] = archive
-    helper = f"/tmp/t3-fleet-{ver}.py"
-    for host, platform in [("m3", "darwin-arm64"), ("j", "linux-x64")]:
-        run("scp", "-o", "ConnectTimeout=8", "-o", "ServerAliveInterval=10",
-            "-o", "ServerAliveCountMax=3", __file__, f"{ssh_route(host)}:{helper}")
-        remote_archive = f"/tmp/t3-fleet-{ver}.tar.gz"
-        run("rsync", "-a", "--partial", "--inplace", "-e",
-            "ssh -o ConnectTimeout=8 -o ServerAliveInterval=10 -o ServerAliveCountMax=3",
-            archives[platform], f"{ssh_route(host)}:{remote_archive}")
-        remote(host, helper, "host-stage", "--version", ver, "--archive", remote_archive)
+    helper = distribute(ver, archives)
     stage(ver, archives["darwin-arm64"])
     # Nothing is switched until all three complete the same staging checks.
     for host in ["m3", "j"]:
@@ -221,10 +241,10 @@ def rebuild(ver, upstream):
     installed.rename(saved / installed.name)
     run("ditto", app, installed)
     preferences = Path.home() / ".t3/userdata/client-settings.json"
-    if preferences.exists():
+    if preferences.exists() and disable_project_folders:
         shutil.copy2(preferences, saved / preferences.name)
         settings = json.loads(preferences.read_text())
-        settings.get("settings", settings).update(boringSidebarEnabled=True, boringSidebarMultilineRows=True, legacySidebarEnabled=False)
+        settings.get("settings", settings).update(boringSidebarEnabled=False, legacySidebarEnabled=False)
         preferences.write_text(json.dumps(settings, indent=2) + "\n")
     launcher = Path.home() / ".local/bin/t3"
     temporary = launcher.with_name("t3.fleet-next")
@@ -243,6 +263,7 @@ if __name__ == "__main__":
     parser.add_argument("--version", required=True, type=version)
     parser.add_argument("--upstream-tag")
     parser.add_argument("--archive")
+    parser.add_argument("--disable-project-folders", action="store_true")
     args = parser.parse_args()
     try:
         if args.action == "host-stage":
@@ -254,7 +275,7 @@ if __name__ == "__main__":
         elif args.action == "host-verify":
             verify(args.version)
         elif args.upstream_tag:
-            rebuild(args.version, args.upstream_tag)
+            rebuild(args.version, args.upstream_tag, args.disable_project_folders)
         else:
             parser.error("--upstream-tag is required for a rebuild")
     except Exception as error:
