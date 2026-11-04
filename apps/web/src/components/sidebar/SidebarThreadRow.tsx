@@ -1415,51 +1415,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           {accessibleTitle}
           <div className="relative z-10 px-(--sidebar-row-content-inset) py-(--sidebar-content-inset)">
             <div className="flex h-5 min-w-0 items-center gap-1.5">
-              {topStatus && topStatus.icon !== "done" ? (
-                isWokeStatus ? (
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <button
-                          type="button"
-                          aria-label="Dismiss Woke notification"
-                          onClick={handleAcknowledgeWokeClick}
-                          className={cn(
-                            "inline-flex cursor-pointer items-center gap-1 rounded-sm font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-                            topStatus.className,
-                          )}
-                        >
-                          <AlarmClockIcon aria-hidden className="size-4 shrink-0" />
-                          <span role="status">{topStatus.label}</span>
-                        </button>
-                      }
-                    />
-                    <TooltipPopup side="top">Dismiss Woke notification</TooltipPopup>
-                  </Tooltip>
-                ) : (
-                  <span
-                    className={cn(
-                      "inline-flex shrink-0 items-center gap-1 text-xs font-medium",
-                      topStatus.className,
-                    )}
-                  >
-                    <TopStatusIcon icon={topStatus.icon} className="size-4" />
-                    {/* Not a live region: a collapsed sidebar is inert, so
-                            BackgroundThreadAnnouncer and the open thread's
-                            timeline speak status changes instead. */}
-                    {status !== "working" ? topStatus.label : null}
-                    {status === "working" ? (
-                      <span aria-hidden>
-                        <WorkingDuration startedAt={resolveWorkingStartedAt(thread)} />
-                      </span>
-                    ) : status === "waiting" ? (
-                      <span aria-hidden>
-                        <WorkingDuration startedAt={thread.latestRun?.completedAt ?? null} />
-                      </span>
-                    ) : null}
-                  </span>
-                )
-              ) : null}
               {draftIndicator}
               {props.project ? (
                 <ProjectFavicon project={props.project} className="-mr-1.5 size-4 shrink-0" />
@@ -1490,19 +1445,53 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                       snoozeMenuOpen && "pointer-events-none absolute right-0 opacity-0",
                     )}
                   >
-                    {topStatus?.icon === "done" ? (
-                      <span
-                        className={cn(
-                          "inline-flex items-center gap-1 font-medium",
-                          topStatus.className,
-                        )}
-                      >
-                        <TopStatusIcon icon={topStatus.icon} className="size-4" />
-                        {topStatus.label}
-                      </span>
-                    ) : topStatus === null ? (
+                    {topStatus ? (
+                      isWokeStatus ? (
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <button
+                                type="button"
+                                aria-label="Dismiss Woke notification"
+                                onClick={handleAcknowledgeWokeClick}
+                                className={cn(
+                                  "inline-flex cursor-pointer items-center gap-1 rounded-sm font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                                  topStatus.className,
+                                )}
+                              >
+                                <AlarmClockIcon aria-hidden className="size-4 shrink-0" />
+                                <span role="status">{topStatus.label}</span>
+                              </button>
+                            }
+                          />
+                          <TooltipPopup side="top">Dismiss Woke notification</TooltipPopup>
+                        </Tooltip>
+                      ) : (
+                        <span
+                          className={cn(
+                            "inline-flex shrink-0 items-center gap-1 text-xs font-medium",
+                            topStatus.className,
+                          )}
+                        >
+                          <TopStatusIcon icon={topStatus.icon} className="size-4" />
+                          {/* Not a live region: a collapsed sidebar is inert, so
+                            BackgroundThreadAnnouncer and the open thread's
+                            timeline speak status changes instead. */}
+                          {status !== "working" ? topStatus.label : null}
+                          {status === "working" ? (
+                            <span aria-hidden>
+                              <WorkingDuration startedAt={resolveWorkingStartedAt(thread)} />
+                            </span>
+                          ) : status === "waiting" ? (
+                            <span aria-hidden>
+                              <WorkingDuration startedAt={thread.latestRun?.completedAt ?? null} />
+                            </span>
+                          ) : null}
+                        </span>
+                      )
+                    ) : (
                       <RelativeTimeLabel timestamp={threadTimeTimestamp(thread)} />
-                    ) : null}
+                    )}
                   </span>
                   {props.settlementSupported || showSnoozeButton || hasUnsentDraft ? (
                     <span
