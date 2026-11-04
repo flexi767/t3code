@@ -6,6 +6,9 @@ import { resolveChatCanvasModel, type ChatCanvasStore } from "./canvasStore";
 import { selectThreadPanelOpen, useRightPanelStore } from "../../rightPanelStore";
 import { observeResize } from "../../lib/observeResize";
 import type { ScopedThreadRef } from "@t3tools/contracts";
+import { useClientSettings } from "../../hooks/useSettings";
+import { useResizableWidth } from "../../hooks/useResizableWidth";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export function ChatCanvas({
   store,
@@ -28,6 +31,22 @@ export function ChatCanvas({
   const widthProbeRef = useRef<HTMLDivElement | null>(null);
   const [timelineElement, registerTimeline] = useState<HTMLElement | null>(null);
   const measurements = useStore(store, (state) => state.measurements);
+  const chatWidth = useClientSettings((settings) => settings.chatWidth);
+  const maxHalfWidth =
+    measurements.width > 0 ? Math.max(320, Math.min(1200, (measurements.width - 96) / 2)) : 1200;
+  // A centered column grows on both sides, so a one-pixel edge drag adds two pixels.
+  const resize = useResizableWidth({
+    storageKey: `t3code:conversation-half-width:${chatWidth}`,
+    defaultWidth:
+      chatWidth === "full"
+        ? Math.max(368, measurements.width / 2)
+        : chatWidth === "wide"
+          ? 576
+          : 368,
+    minWidth: 320,
+    maxWidth: maxHalfWidth,
+    edge: "right",
+  });
   const detailsCardMeasurement = useStore(store, (state) => state.detailsCardMeasurement);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- observes canvas, find bar and timeline resizes and writes the measurements to the canvas store
   useLayoutEffect(() => {
@@ -102,6 +121,8 @@ export function ChatCanvas({
         style={
           {
             "--chat-timeline-gutter": `${measurements.timelineGutter}px`,
+            "--resizable-width": `${resize.width}px`,
+            "--chat-content-max-width": "calc(var(--resizable-width) * 2)",
             "--chat-lane-inset-start": `${layout.chat.insetStart}px`,
             "--chat-lane-inset-end": `${layout.chat.insetEnd}px`,
           } as CSSProperties
@@ -113,6 +134,36 @@ export function ChatCanvas({
           className="pointer-events-none invisible absolute h-0 w-(--chat-content-max-width) min-w-[40rem] box-content ps-3 sm:ps-12"
         />
         {children}
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <div
+                role="separator"
+                aria-label="Resize conversation"
+                aria-orientation="vertical"
+                aria-valuemin={640}
+                aria-valuemax={maxHalfWidth * 2}
+                aria-valuenow={resize.width * 2}
+                tabIndex={0}
+                className="group absolute inset-y-0 z-20 hidden w-2 -translate-x-1/2 cursor-col-resize touch-none select-none sm:block pointer-coarse:hidden"
+                style={{ left: layout.chat.left + layout.chat.width }}
+                {...resize.handlers}
+                onKeyDown={(event) => {
+                  if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+                    event.preventDefault();
+                    resize.setWidth(resize.width + (event.key === "ArrowLeft" ? -10 : 10));
+                  }
+                }}
+              />
+            }
+          >
+            <span
+              aria-hidden
+              className="pointer-events-none absolute inset-y-0 left-1/2 w-px bg-transparent group-hover:bg-border group-focus-visible:bg-primary/60 group-active:bg-primary/60"
+            />
+          </TooltipTrigger>
+          <TooltipPopup>Drag to resize conversation</TooltipPopup>
+        </Tooltip>
       </div>
     </ChatCanvasContext>
   );
