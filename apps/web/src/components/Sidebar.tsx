@@ -71,6 +71,7 @@ import {
 } from "lucide-react";
 import {
   useEffect,
+  useEffectEvent,
   useLayoutEffect,
   useReducer,
   useRef,
@@ -179,8 +180,11 @@ import {
 } from "./threadActionMenu.logic";
 import {
   applySidebarThreadDrop,
+  activeSidebarSubthreadParentKeys,
+  collapseFinishedSidebarThreadGroups,
   filterSidebarV2VisibleThreads,
   groupSidebarThreadsByProject,
+  groupSidebarSubthreads,
   sidebarFolderExpansionKeys,
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
@@ -1118,19 +1122,66 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           ),
         );
   const threads = useQuietThreadShells();
+  const subthreadsByParent = groupSidebarSubthreads(threads);
+  const nestedThreadKeys = new Set(
+    [...subthreadsByParent.values()].flatMap((children) => children.map(threadShellKey)),
+  );
+  const runningSubthreadParentKeys = activeSidebarSubthreadParentKeys(
+    subthreadsByParent,
+    threadShellKey,
+    isThreadWorking,
+  );
+  const runningSubthreadParentsKey = [...runningSubthreadParentKeys].sort().join("\n");
+  const [manuallyExpandedThreadKeys, setManuallyExpandedThreadKeys] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
+  const previousRunningSubthreadParentKeysRef = useRef<ReadonlySet<string>>(new Set());
+  const reconcileThreadGroupExpansion = useEffectEvent((_runningKey: string) => {
+    const previous = previousRunningSubthreadParentKeysRef.current;
+    setManuallyExpandedThreadKeys((current) =>
+      collapseFinishedSidebarThreadGroups(current, previous, runningSubthreadParentKeys),
+    );
+    previousRunningSubthreadParentKeysRef.current = runningSubthreadParentKeys;
+  });
+  // Active child work owns expansion; when it settles, clear any manual hold so the group closes.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- synchronizes disclosure state with child runtime lifecycle
+  useEffect(() => {
+    reconcileThreadGroupExpansion(runningSubthreadParentsKey);
+  }, [runningSubthreadParentsKey]);
+  const isThreadGroupExpanded = (threadKey: string) =>
+    runningSubthreadParentKeys.has(threadKey) || manuallyExpandedThreadKeys.has(threadKey);
+  const toggleThreadGroup = (threadKey: string) => {
+    if (runningSubthreadParentKeys.has(threadKey)) return;
+    setManuallyExpandedThreadKeys((current) => {
+      const next = new Set(current);
+      if (next.has(threadKey)) next.delete(threadKey);
+      else next.add(threadKey);
+      return next;
+    });
+  };
   const routeRowThreadKey =
     routeThreadRef === null
       ? null
-      : scopedThreadKey(
-          scopeThreadRef(
-            routeThreadRef.environmentId,
-            resolveSidebarRowThreadId(
-              routeThreadRef.threadId,
-              routeThreadRef.environmentId,
-              threads,
-            ),
-          ),
-        );
+      : (() => {
+          const directKey = scopedThreadKey(routeThreadRef);
+          return nestedThreadKeys.has(directKey) &&
+            [...subthreadsByParent].some(
+              ([parentKey, children]) =>
+                isThreadGroupExpanded(parentKey) &&
+                children.some((child) => threadShellKey(child) === directKey),
+            )
+            ? directKey
+            : scopedThreadKey(
+                scopeThreadRef(
+                  routeThreadRef.environmentId,
+                  resolveSidebarRowThreadId(
+                    routeThreadRef.threadId,
+                    routeThreadRef.environmentId,
+                    threads,
+                  ),
+                ),
+              );
+        })();
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
 
   // History, the palette and links can open a thread the scope hides or the list
@@ -3308,15 +3359,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                       const renderThreadRow = (
                         thread: EnvironmentThreadShell,
                         section: SidebarSection,
-                        // The tree row of the project folder this row sits in.
-                        folderRow?: string,
+                        // The tree row of the project folder or parent thread this row sits in.
+                        parentRow?: string,
                       ) => {
                         const threadKey = scopedThreadKey(
                           scopeThreadRef(thread.environmentId, thread.id),
                         );
                         const isCard =
                           section === "active" || section === "pinned" || section === "working";
-                        const rowVariant = folderRow
+                        const rowVariant = parentRow
                           ? folderRowsMultiline
                             ? "folder-multiline"
                             : "folder"
@@ -3330,14 +3381,24 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             contextDrag={isContextDrag}
                             sortableDisabled={
                               projectFolders !== null ||
+                              parentRow !== undefined ||
                               renamingThreadKey === threadKey ||
                               !draggableThreadKeys.has(threadKey) ||
                               optimisticDrop !== null
                             }
                             thread={thread}
                             variant={rowVariant}
+                            childGroup={
+                              subthreadsByParent.has(threadKey)
+                                ? {
+                                    expanded: isThreadGroupExpanded(threadKey),
+                                    count: subthreadsByParent.get(threadKey)!.length,
+                                    onToggle: () => toggleThreadGroup(threadKey),
+                                  }
+                                : undefined
+                            }
                             navigationParent={
-                              folderRow ??
+                              parentRow ??
                               (section === "working" ||
                               section === "snoozed" ||
                               section === "settled"
@@ -3437,11 +3498,26 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           onDraftContextMenu={handleDraftContextMenu}
                         />,
                       ];
+                      const appendThreadFamily = (
+                        thread: EnvironmentThreadShell,
+                        section: SidebarSection,
+                        parentRow?: string,
+                        seen = new Set<string>(),
+                      ) => {
+                        const threadKey = threadShellKey(thread);
+                        if (seen.has(threadKey)) return;
+                        seen.add(threadKey);
+                        items.push(renderThreadRow(thread, section, parentRow));
+                        if (!isThreadGroupExpanded(threadKey)) return;
+                        for (const child of subthreadsByParent.get(threadKey) ?? []) {
+                          appendThreadFamily(child, section, threadKey, seen);
+                        }
+                      };
                       for (const item of sidebarListItems) {
                         if (item.kind === "thread") {
                           // Folders draw active rows in their own place below.
                           if (projectFolders !== null && item.section === "active") continue;
-                          items.push(renderThreadRow(threadByKey.get(item.key)!, item.section));
+                          appendThreadFamily(threadByKey.get(item.key)!, item.section);
                           continue;
                         }
                         if (projectFolders !== null && item.marker === "active-placeholder") {
@@ -3458,12 +3534,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               />,
                             );
                             for (const thread of folder.threads) {
-                              items.push(
-                                renderThreadRow(
-                                  thread,
-                                  "active",
-                                  sidebarFolderRowId(folder.group.projectKey),
-                                ),
+                              appendThreadFamily(
+                                thread,
+                                "active",
+                                sidebarFolderRowId(folder.group.projectKey),
                               );
                             }
                           }
