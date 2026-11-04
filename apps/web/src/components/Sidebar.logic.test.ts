@@ -11,6 +11,9 @@ import {
   getFallbackThreadIdAfterDelete,
   hasUnseenCompletion,
   resolveSidebarRowThreadId,
+  groupSidebarSubthreads,
+  activeSidebarSubthreadParentKeys,
+  collapseFinishedSidebarThreadGroups,
   belongsInSidebarWorkingShelf,
   isSidebarEnvironmentDisconnected,
   orderItemsByPreferredIds,
@@ -138,6 +141,62 @@ describe("deleteSelectedThreadEntries", () => {
 });
 
 describe("sidebar thread lineage helpers", () => {
+  it("groups subagents and delegated tasks under their parent in shell order", () => {
+    const environmentId = EnvironmentId.make("environment-row");
+    const remoteEnvironmentId = EnvironmentId.make("environment-remote");
+    const root = makeThreadFixture({ id: ThreadId.make("thread-root"), environmentId });
+    const child = makeThreadFixture({
+      id: ThreadId.make("thread-child"),
+      environmentId,
+      lineage: {
+        rootThreadId: root.id,
+        parentThreadId: root.id,
+        relationshipToParent: "subagent",
+      },
+    });
+    const grandchild = makeThreadFixture({
+      id: ThreadId.make("thread-grandchild"),
+      environmentId,
+      lineage: {
+        rootThreadId: root.id,
+        parentThreadId: child.id,
+        relationshipToParent: "subagent",
+      },
+    });
+    const delegated = makeThreadFixture({
+      id: ThreadId.make("thread-delegated"),
+      environmentId: remoteEnvironmentId,
+      delegatedFrom: { ...scopeThreadRef(environmentId, root.id), title: root.title },
+    });
+    const groups = groupSidebarSubthreads([root, child, grandchild, delegated]);
+
+    expect(
+      groups.get(scopedThreadKey(scopeThreadRef(environmentId, root.id)))?.map(({ id }) => id),
+    ).toEqual([child.id, delegated.id]);
+    expect(
+      groups.get(scopedThreadKey(scopeThreadRef(environmentId, child.id)))?.map(({ id }) => id),
+    ).toEqual([grandchild.id]);
+
+    const activeParents = activeSidebarSubthreadParentKeys(
+      groups,
+      (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+      (thread) => thread.id === grandchild.id,
+    );
+    expect(activeParents).toEqual(
+      new Set([
+        scopedThreadKey(scopeThreadRef(environmentId, root.id)),
+        scopedThreadKey(scopeThreadRef(environmentId, child.id)),
+      ]),
+    );
+    expect(
+      collapseFinishedSidebarThreadGroups(
+        new Set([scopedThreadKey(scopeThreadRef(environmentId, root.id)), "manual"]),
+        activeParents,
+        new Set(),
+      ),
+    ).toEqual(new Set(["manual"]));
+  });
+
   it("maps an open subagent to its nearest visible ancestor's sidebar row", () => {
     const environmentId = EnvironmentId.make("environment-row");
     const otherEnvironmentId = EnvironmentId.make("environment-other");

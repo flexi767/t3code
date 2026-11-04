@@ -591,6 +591,68 @@ export function isSidebarHiddenThread(thread: Pick<SidebarThreadSummary, "lineag
   return !isListedThreadLineage(thread.lineage);
 }
 
+/** Child threads the flat sidebar nests under their visible parent, preserving shell order. */
+export function groupSidebarSubthreads<
+  T extends Pick<
+    SidebarThreadSummary,
+    "archivedAt" | "delegatedFrom" | "environmentId" | "id" | "lineage"
+  >,
+>(threads: readonly T[]): ReadonlyMap<string, readonly T[]> {
+  const threadKeys = new Set(
+    threads.map((thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
+  );
+  const children = new Map<string, T[]>();
+  for (const thread of threads) {
+    if (thread.archivedAt !== null) continue;
+    const parent =
+      thread.lineage.relationshipToParent === "subagent" && thread.lineage.parentThreadId !== null
+        ? scopeThreadRef(thread.environmentId, thread.lineage.parentThreadId)
+        : thread.delegatedFrom;
+    if (parent === undefined || parent === null) continue;
+    const parentKey = scopedThreadKey(parent);
+    if (!threadKeys.has(parentKey)) continue;
+    const siblings = children.get(parentKey);
+    if (siblings) siblings.push(thread);
+    else children.set(parentKey, [thread]);
+  }
+  return children;
+}
+
+/** Every ancestor group that must stay open while one of its descendants is active. */
+export function activeSidebarSubthreadParentKeys<T>(
+  children: ReadonlyMap<string, readonly T[]>,
+  keyOf: (thread: T) => string,
+  isActive: (thread: T) => boolean,
+): ReadonlySet<string> {
+  const active = new Set<string>();
+  const hasActiveDescendant = (parentKey: string, seen: ReadonlySet<string>): boolean => {
+    if (seen.has(parentKey)) return false;
+    const nextSeen = new Set(seen).add(parentKey);
+    return (children.get(parentKey) ?? []).some((child) => {
+      const childKey = keyOf(child);
+      return isActive(child) || hasActiveDescendant(childKey, nextSeen);
+    });
+  };
+  for (const parentKey of children.keys()) {
+    if (hasActiveDescendant(parentKey, new Set())) active.add(parentKey);
+  }
+  return active;
+}
+
+export function collapseFinishedSidebarThreadGroups(
+  expanded: ReadonlySet<string>,
+  previouslyActive: ReadonlySet<string>,
+  active: ReadonlySet<string>,
+): ReadonlySet<string> {
+  const next = new Set(expanded);
+  for (const key of previouslyActive) {
+    if (!active.has(key)) next.delete(key);
+  }
+  return next.size === expanded.size && [...next].every((key) => expanded.has(key))
+    ? expanded
+    : next;
+}
+
 // Subagent and side-chat threads have no sidebar row, so an open one is represented by
 // its nearest listed ancestor. A broken chain (missing parent, cycle,
 // other environment) resolves to the thread itself, which then matches no row.

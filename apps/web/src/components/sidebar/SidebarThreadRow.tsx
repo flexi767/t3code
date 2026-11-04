@@ -41,6 +41,7 @@ import {
   CircleCheckIcon,
   CircleDashedIcon,
   CircleDotDashedIcon,
+  ChevronDownIcon,
   ClockIcon,
   MessageCircleQuestionIcon,
   PinIcon,
@@ -538,6 +539,13 @@ type SidebarThreadRowProps = {
   snoozeSupported: boolean;
   pinningSupported: boolean;
   isPinned: boolean;
+  childGroup?:
+    | {
+        expanded: boolean;
+        count: number;
+        onToggle: () => void;
+      }
+    | undefined;
   sortable?: SortableThreadRowBag | undefined;
   dropVerb: SidebarDropVerb | null;
   dragOverPinned: boolean;
@@ -1037,6 +1045,27 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     </span>
   );
   const accessibleTitle = isRenaming ? null : <span className="sr-only">{thread.title}</span>;
+  const childGroupDisclosure = props.childGroup ? (
+    <button
+      type="button"
+      aria-label={`${props.childGroup.expanded ? "Collapse" : "Expand"} ${props.childGroup.count} subthreads`}
+      aria-expanded={props.childGroup.expanded}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        props.childGroup?.onToggle();
+      }}
+      className="-ml-1 inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-sidebar-muted-foreground outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+    >
+      <ChevronDownIcon
+        aria-hidden
+        className={cn(
+          "size-3.5 transition-transform motion-reduce:transition-none",
+          !props.childGroup.expanded && "-rotate-90",
+        )}
+      />
+    </button>
+  ) : null;
 
   const prBadgeShape = supportsMultiplePullRequests
     ? resolveThreadPullRequestBadge(thread.pullRequests)
@@ -1221,6 +1250,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             {/* `contents` keeps one-line rows a single flex row. */}
             <div className={multiline ? "flex h-6 min-w-0 items-center gap-2.5" : "contents"}>
               {accessibleTitle}
+              {childGroupDisclosure}
               {inFolder ? null : (
                 <span
                   className={cn(
@@ -1420,6 +1450,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           {accessibleTitle}
           <div className="relative z-10 px-(--sidebar-row-content-inset) py-(--sidebar-content-inset)">
             <div className="flex h-5 min-w-0 items-center gap-1.5">
+              {childGroupDisclosure}
               {draftIndicator}
               {props.project ? (
                 <ProjectFavicon project={props.project} className="-mr-1.5 size-4 shrink-0" />
