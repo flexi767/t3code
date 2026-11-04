@@ -98,6 +98,14 @@ An empty database is a bad test. Seed your worktree's `.t3` with a copy of real 
 
 ## Verifying
 
+### Personal fork fleet
+
+For this fork, rebuild and install through `python3 scripts/rebuild-fleet.py --version <unique-preview-version> --upstream-tag <exact-upstream-tag>`.
+It stages and verifies M5, M3 and J together before switching the desktop app.
+Do not install a separately versioned desktop or omit the SSH `.install-complete` marker.
+Keep the local persistent signing identity in ignored `.env.local` and preserve T3 Connect configuration.
+See [fleet rollout](docs/operations/fork-fleet.md).
+
 - Before you push, run `vp run check:changed`. It runs CI's fast checks for changed files: format, lint, knip, typecheck of affected packages and dependents, tests beside changes, and the cross-file checks those miss. CI still runs the full test suites.
 - While you iterate, run `vp test run <files>`. For big files, add `-t "<name>"`.
 - Use `vp run typecheck`, not `npx tsc`; it caches per package. Both run tsc-rs (`typescript` is the `@tsc-rs/typescript` drop-in).

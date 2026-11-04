@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ServerConfig from "../config.ts";
 import { readCheckoutDetails } from "./checkoutDetails.ts";
@@ -37,7 +38,7 @@ it.live("reports the checked out revision, HEAD update time and exact origin/mai
         Layer.provideMerge(
           ServerConfig.layerTest(process.cwd(), { prefix: "checkout-details-test-" }),
         ),
-        Layer.provideMerge(NodeServices.layer),
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       ),
     ),
   ),
