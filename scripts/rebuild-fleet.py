@@ -122,7 +122,11 @@ def verify(ver):
 
 def remote(host, helper, *args):
     command = shlex.join(["python3", helper, *map(str, args)])
-    run("ssh", "-o", "ConnectTimeout=8", host, command)
+    run("ssh", "-o", "ConnectTimeout=8", ssh_route(host), command)
+
+
+def ssh_route(host):
+    return os.environ.get("T3CODE_FLEET_M3_SSH_HOST", host) if host == "m3" else host
 
 
 def rebuild(ver, upstream):
@@ -140,7 +144,7 @@ def rebuild(ver, upstream):
         raise RuntimeError("Server dependencies differ from the upstream runtime archives")
     idle()
     for host in ["m3", "j"]:
-        run("ssh", "-o", "ConnectTimeout=8", host, "true")
+        run("ssh", "-o", "ConnectTimeout=8", ssh_route(host), "true")
     builds = Path.home() / ".t3/builds" / ver
     builds.mkdir(parents=True, exist_ok=True)
     base_version = upstream.removeprefix("v")
@@ -188,9 +192,9 @@ def rebuild(ver, upstream):
         archives[platform] = archive
     helper = f"/tmp/t3-fleet-{ver}.py"
     for host, platform in [("m3", "darwin-arm64"), ("j", "linux-x64")]:
-        run("scp", __file__, f"{host}:{helper}")
+        run("scp", __file__, f"{ssh_route(host)}:{helper}")
         remote_archive = f"/tmp/t3-fleet-{ver}.tar.gz"
-        run("scp", archives[platform], f"{host}:{remote_archive}")
+        run("scp", archives[platform], f"{ssh_route(host)}:{remote_archive}")
         remote(host, helper, "host-stage", "--version", ver, "--archive", remote_archive)
     stage(ver, archives["darwin-arm64"])
     # Nothing is switched until all three complete the same staging checks.
@@ -203,7 +207,7 @@ def rebuild(ver, upstream):
         runner = output("node", "--input-type=module", "-e",
                         "import {buildRemoteT3RunnerScript} from './packages/ssh/src/tunnel.ts';"
                         f"process.stdout.write(buildRemoteT3RunnerScript({{archiveVersion:{json.dumps(ver)}}}));")
-        result = subprocess.check_output(["ssh", host, "sh -s -- --version"], input=runner, text=True).strip()
+        result = subprocess.check_output(["ssh", ssh_route(host), "sh -s -- --version"], input=runner, text=True).strip()
         if result != f"t3 v{ver}":
             raise RuntimeError(f"{host}: desktop SSH runner version mismatch")
     idle()

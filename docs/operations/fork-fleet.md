@@ -11,7 +11,8 @@ python3 scripts/rebuild-fleet.py --version 0.1.8-preview.20261104.1 --upstream-t
 ```
 
 Use a new version every time. The script requires both SSH hosts to be reachable,
-and no active T3 turns when switching. It builds serially, verifies upstream
+and can use an existing direct M3 SSH alias by setting `T3CODE_FLEET_M3_SSH_HOST=m3-lan`.
+It requires no active T3 turns when switching. It builds serially, verifies upstream
 archive checksums and dependency compatibility, preserves the configured local
 Apple signing identity, stages complete runtimes, and writes the SSH installation
 marker only after each binary reports the expected version. Remote servers switch
