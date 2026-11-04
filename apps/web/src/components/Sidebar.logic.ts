@@ -5,6 +5,7 @@ import { isShownUnderParent } from "@t3tools/client-runtime/state/threads";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import * as React from "react";
+import * as DateTime from "effect/DateTime";
 import {
   isAtomCommandInterrupted,
   type AtomCommandResult,
@@ -618,7 +619,7 @@ export function groupSidebarSubthreads<
   return children;
 }
 
-/** Every ancestor group that must stay open while one of its descendants is active. */
+/** Ancestors that open by default while a descendant is active. */
 export function activeSidebarSubthreadParentKeys<T>(
   children: ReadonlyMap<string, readonly T[]>,
   keyOf: (thread: T) => string,
@@ -639,18 +640,53 @@ export function activeSidebarSubthreadParentKeys<T>(
   return active;
 }
 
-export function collapseFinishedSidebarThreadGroups(
-  expanded: ReadonlySet<string>,
-  previouslyActive: ReadonlySet<string>,
+export function sidebarThreadGroupExpanded(
+  key: string,
   active: ReadonlySet<string>,
-): ReadonlySet<string> {
-  const next = new Set(expanded);
-  for (const key of previouslyActive) {
-    if (!active.has(key)) next.delete(key);
+  overrides: ReadonlyMap<string, boolean>,
+): boolean {
+  return overrides.get(key) ?? active.has(key);
+}
+
+export function reconcileSidebarThreadGroupOverrides(
+  overrides: ReadonlyMap<string, boolean>,
+  previous: ReadonlySet<string>,
+  active: ReadonlySet<string>,
+): ReadonlyMap<string, boolean> {
+  const next = new Map(overrides);
+  for (const key of new Set([...previous, ...active])) {
+    if (previous.has(key) !== active.has(key)) next.delete(key);
   }
-  return next.size === expanded.size && [...next].every((key) => expanded.has(key))
-    ? expanded
-    : next;
+  return next.size === overrides.size ? overrides : next;
+}
+
+export function latestSidebarSubagentKeys(
+  tasks: readonly {
+    runId: string | null;
+    startedAt: string | DateTime.Utc | null;
+    updatedAt: string | DateTime.Utc;
+    childThreadId: ThreadId | null;
+    remoteChild?: { environmentId: EnvironmentId; threadId: ThreadId } | undefined;
+  }[],
+  environmentId: EnvironmentId,
+): ReadonlySet<string> {
+  const started = (task: (typeof tasks)[number]) => {
+    const value = task.startedAt ?? task.updatedAt;
+    return typeof value === "string" ? Date.parse(value) : DateTime.toEpochMillis(value);
+  };
+  const latest = tasks.reduce<(typeof tasks)[number] | null>(
+    (current, task) => (current === null || started(task) > started(current) ? task : current),
+    null,
+  );
+  const keys = new Set<string>();
+  if (latest === null) return keys;
+  for (const task of tasks) {
+    if (latest.runId === null ? task !== latest : task.runId !== latest.runId) continue;
+    if (task.remoteChild) keys.add(scopedThreadKey(task.remoteChild));
+    else if (task.childThreadId)
+      keys.add(scopedThreadKey(scopeThreadRef(environmentId, task.childThreadId)));
+  }
+  return keys;
 }
 
 // Subagent and side-chat threads have no sidebar row, so an open one is represented by

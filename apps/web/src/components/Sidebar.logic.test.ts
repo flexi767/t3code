@@ -13,7 +13,9 @@ import {
   resolveSidebarRowThreadId,
   groupSidebarSubthreads,
   activeSidebarSubthreadParentKeys,
-  collapseFinishedSidebarThreadGroups,
+  sidebarThreadGroupExpanded,
+  reconcileSidebarThreadGroupOverrides,
+  latestSidebarSubagentKeys,
   belongsInSidebarWorkingShelf,
   isSidebarEnvironmentDisconnected,
   orderItemsByPreferredIds,
@@ -141,6 +143,55 @@ describe("deleteSelectedThreadEntries", () => {
 });
 
 describe("sidebar thread lineage helpers", () => {
+  it("honors manual collapse while active and resets at lifecycle boundaries", () => {
+    const active = new Set(["parent"]);
+    const hidden = new Map([["parent", false]]);
+    expect(sidebarThreadGroupExpanded("parent", active, hidden)).toBe(false);
+    expect(reconcileSidebarThreadGroupOverrides(hidden, active, active)).toBe(hidden);
+    expect(sidebarThreadGroupExpanded("parent", active, new Map([["parent", true]]))).toBe(true);
+    expect(reconcileSidebarThreadGroupOverrides(hidden, active, new Set()).size).toBe(0);
+    expect(
+      reconcileSidebarThreadGroupOverrides(new Map([["parent", true]]), new Set(), active).size,
+    ).toBe(0);
+  });
+  it("selects the latest launch run including completed and remote siblings", () => {
+    const environmentId = EnvironmentId.make("m5");
+    const remote = EnvironmentId.make("m3");
+    const child = ThreadId.make("child");
+    const sibling = ThreadId.make("sibling");
+    const task = {
+      runId: "new",
+      startedAt: "2026-11-05T00:01:00Z",
+      updatedAt: "2026-11-05T00:09:00Z",
+      childThreadId: child,
+    };
+    expect(
+      latestSidebarSubagentKeys(
+        [
+          {
+            ...task,
+            runId: "old",
+            startedAt: "2026-11-04T20:00:00Z",
+            updatedAt: "2026-11-05T01:00:00Z",
+            childThreadId: ThreadId.make("old"),
+          },
+          task,
+          {
+            ...task,
+            startedAt: "2026-11-05T00:01:02Z",
+            childThreadId: null,
+            remoteChild: scopeThreadRef(remote, sibling),
+          },
+        ],
+        environmentId,
+      ),
+    ).toEqual(
+      new Set([
+        scopedThreadKey(scopeThreadRef(environmentId, child)),
+        scopedThreadKey(scopeThreadRef(remote, sibling)),
+      ]),
+    );
+  });
   it("groups subagents and delegated tasks under their parent in shell order", () => {
     const environmentId = EnvironmentId.make("environment-row");
     const remoteEnvironmentId = EnvironmentId.make("environment-remote");
@@ -188,13 +239,6 @@ describe("sidebar thread lineage helpers", () => {
         scopedThreadKey(scopeThreadRef(environmentId, child.id)),
       ]),
     );
-    expect(
-      collapseFinishedSidebarThreadGroups(
-        new Set([scopedThreadKey(scopeThreadRef(environmentId, root.id)), "manual"]),
-        activeParents,
-        new Set(),
-      ),
-    ).toEqual(new Set(["manual"]));
   });
 
   it("maps an open subagent to its nearest visible ancestor's sidebar row", () => {

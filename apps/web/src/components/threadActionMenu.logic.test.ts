@@ -74,4 +74,22 @@ describe("buildThreadActionMenuItems", () => {
     expect(items.find((item) => item.id === "archive")?.disabled).toBe(true);
     expect(items.find((item) => item.id === "turn-into-project")?.disabled).toBe(true);
   });
+  it.each([
+    { active: true, expanded: true, expected: ["hide-subagents"] },
+    { active: true, expanded: false, expected: ["show-subagents"] },
+    { active: false, expanded: false, expected: ["show-last-subagents"] },
+    { active: false, expanded: true, expected: ["hide-subagents", "show-last-subagents"] },
+  ])(
+    "keeps subagent disclosure available without write permission: $expected",
+    ({ active, expanded, expected }) => {
+      const items = buildThreadActionMenuItems({
+        ...baseState,
+        canOperate: false,
+        subagentGroup: { active, expanded },
+      });
+      const groupItems = items.filter((item) => item.id.includes("subagents"));
+      expect(groupItems.map((item) => item.id)).toEqual(expected);
+      expect(groupItems.every((item) => !item.disabled)).toBe(true);
+    },
+  );
 });

@@ -3,6 +3,9 @@ import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled"
 
 export type ThreadActionMenuId =
   | "find"
+  | "show-subagents"
+  | "hide-subagents"
+  | "show-last-subagents"
   | "new-thread-on-branch"
   | "filter-by-project"
   | "turn-into-project"
@@ -95,12 +98,16 @@ export interface ThreadActionMenuState {
   readonly canShareWithGuest?: boolean;
   /** A No project thread with its own folder, on a server that can promote it. */
   readonly canTurnIntoProject?: boolean;
+  readonly subagentGroup?: { readonly expanded: boolean; readonly active: boolean } | undefined;
 }
 
 /** Local navigation, read markers, and copying remain available to read-only clients. */
 export function threadActionRequiresOperate(action: ThreadActionMenuId): boolean {
   return ![
     "find",
+    "show-subagents",
+    "hide-subagents",
+    "show-last-subagents",
     "new-thread-on-branch",
     "project-settings",
     "mark-unread",
@@ -117,6 +124,26 @@ export function buildThreadActionMenuItems(
   state: ThreadActionMenuState,
 ): ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> {
   const items: ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> = [
+    ...(state.subagentGroup?.expanded || state.subagentGroup?.active
+      ? [
+          {
+            id: state.subagentGroup.expanded
+              ? ("hide-subagents" as const)
+              : ("show-subagents" as const),
+            label: state.subagentGroup.expanded ? "Hide subagents" : "Show subagents",
+            icon: "list-tree",
+          },
+        ]
+      : []),
+    ...(state.subagentGroup && !state.subagentGroup.active
+      ? [
+          {
+            id: "show-last-subagents" as const,
+            label: "Show last subagents",
+            icon: "list-tree",
+          },
+        ]
+      : []),
     ...(state.canFind
       ? [{ id: "find" as const, label: "Find in thread", icon: "text-search" }]
       : []),

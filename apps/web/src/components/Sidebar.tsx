@@ -152,6 +152,7 @@ import {
   useProjects,
   useServerConfigs,
   useQuietThreadShells,
+  useQuietThreadProjection,
 } from "../state/entities";
 import { environmentPresentations } from "../state/presentation";
 import { primaryServerKeybindingsAtom } from "../state/server";
@@ -181,7 +182,9 @@ import {
 import {
   applySidebarThreadDrop,
   activeSidebarSubthreadParentKeys,
-  collapseFinishedSidebarThreadGroups,
+  sidebarThreadGroupExpanded,
+  reconcileSidebarThreadGroupOverrides,
+  latestSidebarSubagentKeys,
   filterSidebarV2VisibleThreads,
   groupSidebarThreadsByProject,
   groupSidebarSubthreads,
@@ -1132,32 +1135,59 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     isThreadWorking,
   );
   const runningSubthreadParentsKey = [...runningSubthreadParentKeys].sort().join("\n");
-  const [manuallyExpandedThreadKeys, setManuallyExpandedThreadKeys] = useState<ReadonlySet<string>>(
-    new Set(),
+  const [threadGroupOverrides, setThreadGroupOverrides] = useState<ReadonlyMap<string, boolean>>(
+    new Map(),
   );
+  const [lastSubagentRequest, setLastSubagentRequest] = useState<ScopedThreadRef | null>(null);
+  const [lastSubagentKeysByParent, setLastSubagentKeysByParent] = useState<
+    ReadonlyMap<string, ReadonlySet<string>>
+  >(new Map());
+  const lastSubagentProjection = useQuietThreadProjection(lastSubagentRequest);
+  /* oxlint-disable react/set-state-in-effect -- completes the user's disclosure request when the external thread snapshot arrives */
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- resolves the requested historical group after its thread snapshot arrives
+  useEffect(() => {
+    if (lastSubagentRequest === null || lastSubagentProjection === null) return;
+    const key = scopedThreadKey(lastSubagentRequest);
+    const keys = latestSidebarSubagentKeys(
+      lastSubagentProjection.projection.subagents,
+      lastSubagentRequest.environmentId,
+    );
+    if (keys.size === 0) {
+      toastManager.add({ type: "error", title: "Subagent history unavailable" });
+      setLastSubagentRequest(null);
+      return;
+    }
+    setLastSubagentKeysByParent((current) => new Map(current).set(key, keys));
+    setThreadGroupOverrides((current) => new Map(current).set(key, true));
+    setLastSubagentRequest(null);
+  }, [lastSubagentProjection, lastSubagentRequest]);
+  /* oxlint-enable react/set-state-in-effect */
   const previousRunningSubthreadParentKeysRef = useRef<ReadonlySet<string>>(new Set());
   const reconcileThreadGroupExpansion = useEffectEvent((_runningKey: string) => {
     const previous = previousRunningSubthreadParentKeysRef.current;
-    setManuallyExpandedThreadKeys((current) =>
-      collapseFinishedSidebarThreadGroups(current, previous, runningSubthreadParentKeys),
+    setThreadGroupOverrides((current) =>
+      reconcileSidebarThreadGroupOverrides(current, previous, runningSubthreadParentKeys),
     );
+    setLastSubagentKeysByParent((current) => {
+      const next = new Map(current);
+      for (const key of runningSubthreadParentKeys) if (!previous.has(key)) next.delete(key);
+      return next.size === current.size ? current : next;
+    });
     previousRunningSubthreadParentKeysRef.current = runningSubthreadParentKeys;
   });
-  // Active child work owns expansion; when it settles, clear any manual hold so the group closes.
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- synchronizes disclosure state with child runtime lifecycle
   useEffect(() => {
     reconcileThreadGroupExpansion(runningSubthreadParentsKey);
   }, [runningSubthreadParentsKey]);
   const isThreadGroupExpanded = (threadKey: string) =>
-    runningSubthreadParentKeys.has(threadKey) || manuallyExpandedThreadKeys.has(threadKey);
+    sidebarThreadGroupExpanded(threadKey, runningSubthreadParentKeys, threadGroupOverrides);
   const toggleThreadGroup = (threadKey: string) => {
-    if (runningSubthreadParentKeys.has(threadKey)) return;
-    setManuallyExpandedThreadKeys((current) => {
-      const next = new Set(current);
-      if (next.has(threadKey)) next.delete(threadKey);
-      else next.add(threadKey);
-      return next;
-    });
+    setThreadGroupOverrides((current) =>
+      new Map(current).set(
+        threadKey,
+        !sidebarThreadGroupExpanded(threadKey, runningSubthreadParentKeys, current),
+      ),
+    );
   };
   const routeRowThreadKey =
     routeThreadRef === null
@@ -2678,6 +2708,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 AuthOrchestrationOperateScope,
               ),
               branch: thread.branch ?? null,
+              subagentGroup: subthreadsByParent.has(threadKey)
+                ? {
+                    expanded: isThreadGroupExpanded(threadKey),
+                    active: runningSubthreadParentKeys.has(threadKey),
+                  }
+                : undefined,
               // An archived project is not a filter choice.
               projectFilter:
                 threadProjectGroup && !threadProjectGroup.archived
@@ -2725,6 +2761,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           return;
         }
         switch (clicked.value) {
+          case "hide-subagents":
+            setThreadGroupOverrides((current) => new Map(current).set(threadKey, false));
+            return;
+          case "show-subagents":
+            setThreadGroupOverrides((current) => new Map(current).set(threadKey, true));
+            return;
+          case "show-last-subagents":
+            setLastSubagentRequest(threadRef);
+            return;
           case "filter-by-project":
             if (threadProjectGroup) {
               setProjectScopeKeys(
@@ -3510,6 +3555,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         items.push(renderThreadRow(thread, section, parentRow));
                         if (!isThreadGroupExpanded(threadKey)) return;
                         for (const child of subthreadsByParent.get(threadKey) ?? []) {
+                          const lastKeys = runningSubthreadParentKeys.has(threadKey)
+                            ? undefined
+                            : lastSubagentKeysByParent.get(threadKey);
+                          if (lastKeys !== undefined && !lastKeys.has(threadShellKey(child)))
+                            continue;
                           appendThreadFamily(child, section, threadKey, seen);
                         }
                       };
