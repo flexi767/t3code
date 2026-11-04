@@ -145,7 +145,7 @@ def distribute(ver, archives):
             shutil.copyfileobj(source, target)
         destination = f"/tmp/t3-fleet-{ver}-{platform}.tar"
         seed_transfer_cache("j", destination, platform)
-        run("rsync", "-az", "--partial", "--inplace", "-e", transport,
+        run("rsync", "-azc", "--partial", "--inplace", "-e", transport,
             plain, f"{ssh_route('j')}:{destination}")
         remote_archives[platform] = destination
         archives[platform] = plain
@@ -154,7 +154,7 @@ def distribute(ver, archives):
         if source.endswith(".tar"):
             seed_transfer_cache("m3", source, "darwin-arm64")
         run("ssh", *ssh_options, ssh_route("m3"), shlex.join([
-            "rsync", "-az", "--partial", "--inplace", "-e", transport,
+            "rsync", "-azc", "--partial", "--inplace", "-e", transport,
             f"j:{source}", "/tmp/",
         ]))
     for host, platform in [("j", "linux-x64"), ("m3", "darwin-arm64")]:
@@ -172,7 +172,7 @@ def seed_transfer_cache(host, destination, platform):
         "from pathlib import Path; import shutil; "
         f"target=Path({destination!r}); "
         f"previous=sorted((p for p in Path('/tmp').glob('t3-fleet-*-{platform}.tar') if p != target), key=lambda p:p.stat().st_mtime, reverse=True); "
-        "shutil.copyfile(previous[0], target) if not target.exists() and previous else None"
+        "shutil.copy2(previous[0], target) if not target.exists() and previous else None"
     )
     run("ssh", "-o", "ConnectTimeout=8", ssh_route(host), shlex.join(["python3", "-c", code]))
 
