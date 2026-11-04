@@ -29,6 +29,7 @@ function MenuPopup({
   anchor,
   keepMounted = false,
   width = "default",
+  layer = "default",
   ...props
 }: MenuPrimitive.Popup.Props & {
   align?: MenuPrimitive.Positioner.Props["align"];
@@ -39,6 +40,7 @@ function MenuPopup({
   anchor?: MenuPrimitive.Positioner.Props["anchor"];
   keepMounted?: boolean;
   width?: "default" | "content";
+  layer?: "default" | "above-tooltip";
 }) {
   return (
     <MenuPrimitive.Portal keepMounted={keepMounted}>
@@ -47,7 +49,7 @@ function MenuPopup({
         alignOffset={alignOffset}
         anchor={anchor}
         collisionAvoidance={collisionAvoidance}
-        className="z-[130]"
+        className={layer === "above-tooltip" ? "z-[150]" : "z-[130]"}
         data-slot="menu-positioner"
         render={renderClosingPositioner}
         side={side}

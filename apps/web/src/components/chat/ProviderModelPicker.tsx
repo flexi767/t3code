@@ -13,7 +13,6 @@ import { cn } from "~/lib/utils";
 import { ModelPickerContent, resolveModelPickerSelectedModel } from "./ModelPickerContent";
 import { ChatGptSharingControl } from "./ChatGptSharingControl";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
-import { compactSessionModel } from "../../lib/sessionLabels";
 import { ModelEsque, getDisplayModelName, getTriggerDisplayModelName } from "./providerIconUtils";
 import { shouldShowInstanceBadge, type ProviderInstanceEntry } from "../../providerInstances";
 import { ComposerControl, type ComposerControlSize } from "./ComposerControl";
@@ -237,7 +236,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     .filter(Boolean)
     .join(" · ");
 
-  const triggerText = props.triggerLabel ?? multipleLabel ?? compactSessionModel(triggerTitle);
+  const triggerText = props.triggerLabel ?? multipleLabel ?? triggerLabel;
   const triggerTextProps = {
     className: cn(
       "min-w-0 flex-1 overflow-hidden truncate",

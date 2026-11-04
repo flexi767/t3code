@@ -1526,7 +1526,7 @@ export default function GitActionsControl({
             </span>
             <ChevronDownIcon aria-hidden className={THREAD_DETAILS_PANEL_CHEVRON_CLASS} />
           </MenuTrigger>
-          <MenuPopup align="start" className="min-w-56">
+          <MenuPopup align="start" layer="above-tooltip" className="min-w-56">
             {gitItems}
           </MenuPopup>
         </Menu>
