@@ -55,7 +55,10 @@ export class ElectronProtocolUnregistrationError extends Schema.TaggedError<Elec
 export type DesktopProtocolRegistrationInput = {
   readonly scheme: string;
   readonly clerkFrontendApiHostname: string | undefined;
-} & ({ readonly targetOrigin: URL } | { readonly assetDirectory: string });
+} & (
+  | { readonly targetOrigin: URL }
+  | { readonly assetDirectory: string; readonly uiClientDirectory?: string }
+);
 
 export class ElectronProtocol extends Context.Service<
   ElectronProtocol,
@@ -239,6 +242,7 @@ const serveDesktopAsset = Effect.fn("desktop.protocol.serveAsset")(function* (
   return new Response(request.method === "HEAD" ? null : new Uint8Array(contents), {
     headers: {
       "content-type": Option.getOrElse(Mime.getType(filePath), () => "application/octet-stream"),
+      ...(path.basename(filePath) === "index.html" ? { "cache-control": "no-store" } : {}),
     },
   });
 });
@@ -247,6 +251,8 @@ const serveDesktopAsset = Effect.fn("desktop.protocol.serveAsset")(function* (
 export const make = Effect.gen(function* () {
   const registered = yield* Ref.make(false);
   const context = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const runPromise = Effect.runPromiseWith(context);
 
   const registerDesktopProtocol = Effect.fn("desktop.electron.protocol.registerDesktopProtocol")(
@@ -260,10 +266,17 @@ export const make = Effect.gen(function* () {
           try: () => {
             Electron.protocol.handle(input.scheme, async (request) => {
               if ("assetDirectory" in input) {
-                return withContentSecurityPolicy(
-                  await runPromise(serveDesktopAsset(request, input.assetDirectory)),
-                  contentSecurityPolicy,
+                const override = input.uiClientDirectory;
+                const hasOverride =
+                  override !== undefined &&
+                  (await runPromise(fileSystem.exists(path.join(override, "index.html"))));
+                let response = await runPromise(
+                  serveDesktopAsset(request, hasOverride ? override! : input.assetDirectory),
                 );
+                if (hasOverride && response.status === 404) {
+                  response = await runPromise(serveDesktopAsset(request, input.assetDirectory));
+                }
+                return withContentSecurityPolicy(response, contentSecurityPolicy);
               }
               return runPromise(
                 proxyRequest(request, input.targetOrigin, contentSecurityPolicy).pipe(

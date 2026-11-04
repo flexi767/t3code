@@ -1,5 +1,13 @@
 # Personal fork fleet
 
+For web UI changes on M5, use `python3 scripts/update-ui.py`. It builds only
+the web client, retains old chunks, and atomically replaces the HTML entry.
+Reload the window to use it; running turns, remote hosts, CLI versions and
+server processes are unaffected. Changes to contracts, shared runtime or
+dependencies require the full rollout below. The signed desktop shell needs
+the UI-loader bootstrap once before this command works. UI revisions live in
+`~/.t3/ui/<desktop-version>/revision.json`, independently of the server version.
+
 M5 runs the signed desktop app. M3 and J run managed server services. All three
 must have the desktop's exact CLI version installed: SSH otherwise tries to
 download that version from public releases, where private fork builds do not exist.

@@ -99,6 +99,9 @@ it.effect(
           } as unknown as ElectronDialog.ElectronDialog["Service"]),
           Effect.provideService(DesktopEnvironment.DesktopEnvironment, {
             platform: "linux",
+            path: { join: (...parts: string[]) => parts.join("/") },
+            baseDir: "/tmp/t3-desktop-app-test",
+            appVersion: "0.1.8",
             isDevelopment: false,
             isPackaged: true,
             configuredBackendPort: Option.some(3773),

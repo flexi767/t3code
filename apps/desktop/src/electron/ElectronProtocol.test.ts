@@ -41,6 +41,7 @@ describe("ElectronProtocol", () => {
       yield* protocol.registerDesktopProtocol({
         scheme: "t3code",
         assetDirectory: directory,
+        uiClientDirectory: `${directory}/ui`,
         clerkFrontendApiHostname: undefined,
       });
       const request = (pathname: string, init?: RequestInit) =>
@@ -63,6 +64,16 @@ describe("ElectronProtocol", () => {
       assert.equal((yield* request("/%invalid")).status, 400);
       assert.equal((yield* request("/", { method: "POST" })).status, 405);
       assert.equal(netFetchMock.mock.calls.length, 0);
+      yield* fileSystem.makeDirectory(`${directory}/ui`);
+      yield* fileSystem.writeFileString(`${directory}/ui/index.html`, "<html>updated UI</html>");
+      yield* fileSystem.writeFileString(`${directory}/ui/new.js`, "export default 2;");
+      const updatedPage = yield* request("/");
+      assert.equal(yield* Effect.promise(() => updatedPage.text()), "<html>updated UI</html>");
+      const updatedScript = yield* request("/new.js");
+      assert.equal(yield* Effect.promise(() => updatedScript.text()), "export default 2;");
+      const originalScript = yield* request("/app.js");
+      assert.equal(yield* Effect.promise(() => originalScript.text()), "export default 1;");
+      assert.equal((yield* request("/%2e%2e%2fsecret.txt")).status, 404);
     }).pipe(Effect.provide(Layer.merge(layerProtocol, NodeServices.layer)), Effect.scoped),
   );
 
