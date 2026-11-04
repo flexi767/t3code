@@ -122,7 +122,8 @@ def verify(ver):
 
 def remote(host, helper, *args):
     command = shlex.join(["python3", helper, *map(str, args)])
-    run("ssh", "-o", "ConnectTimeout=8", ssh_route(host), command)
+    run("ssh", "-o", "ConnectTimeout=8", "-o", "ServerAliveInterval=10",
+        "-o", "ServerAliveCountMax=3", ssh_route(host), command)
 
 
 def ssh_route(host):
@@ -192,9 +193,12 @@ def rebuild(ver, upstream):
         archives[platform] = archive
     helper = f"/tmp/t3-fleet-{ver}.py"
     for host, platform in [("m3", "darwin-arm64"), ("j", "linux-x64")]:
-        run("scp", __file__, f"{ssh_route(host)}:{helper}")
+        run("scp", "-o", "ConnectTimeout=8", "-o", "ServerAliveInterval=10",
+            "-o", "ServerAliveCountMax=3", __file__, f"{ssh_route(host)}:{helper}")
         remote_archive = f"/tmp/t3-fleet-{ver}.tar.gz"
-        run("scp", archives[platform], f"{ssh_route(host)}:{remote_archive}")
+        run("rsync", "-a", "--partial", "--inplace", "-e",
+            "ssh -o ConnectTimeout=8 -o ServerAliveInterval=10 -o ServerAliveCountMax=3",
+            archives[platform], f"{ssh_route(host)}:{remote_archive}")
         remote(host, helper, "host-stage", "--version", ver, "--archive", remote_archive)
     stage(ver, archives["darwin-arm64"])
     # Nothing is switched until all three complete the same staging checks.
@@ -228,7 +232,8 @@ def rebuild(ver, upstream):
     temporary.replace(launcher)
     run("open", installed)
     verify(ver)
-    (builds / "fleet-complete.json").write_text(json.dumps({"version": ver, "hosts": ["m5", "m3", "j"], "source": output("git", "rev-parse", "HEAD")}))
+    payload_source = json.loads((runtime(ver) / ".fleet-source.json").read_text())["source"]
+    (builds / "fleet-complete.json").write_text(json.dumps({"version": ver, "hosts": ["m5", "m3", "j"], "source": payload_source, "rolloutToolSource": output("git", "rev-parse", "HEAD")}))
     print(f"Fleet complete: M5, M3 and J all run {ver}", flush=True)
 
 

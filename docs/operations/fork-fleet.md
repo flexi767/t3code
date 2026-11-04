@@ -18,6 +18,8 @@ Apple signing identity, stages complete runtimes, and writes the SSH installatio
 marker only after each binary reports the expected version. Remote servers switch
 before the desktop, and running server versions must match before a completion
 receipt is written under `~/.t3/builds/<version>/fleet-complete.json`.
+Archive transfers retain partial data for resumption; SSH keepalive checks stop
+unresponsive connections instead of leaving a transfer hanging indefinitely.
 
 The first two Labs sidebar design options are enabled by default in the fork;
 the rollout also enables them in M5's existing desktop preferences. Other Labs
