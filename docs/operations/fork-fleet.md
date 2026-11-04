@@ -1,6 +1,6 @@
 # Personal fork fleet
 
-For web UI changes on M5, use `python3 scripts/update-ui.py`. It builds only
+For web UI changes on M5, use `scripts/fork-deploy ui`. It builds only
 the web client, retains old chunks, and atomically replaces the HTML entry.
 Reload the window to use it; running turns, remote hosts, CLI versions and
 server processes are unaffected. Changes to contracts, shared runtime or
@@ -15,7 +15,7 @@ download that version from public releases, where private fork builds do not exi
 From a clean, committed M5 checkout with dependencies installed:
 
 ```sh
-python3 scripts/rebuild-fleet.py --version 0.1.8-preview.20261104.1 --upstream-tag v0.1.8-nightly.20261104.4179
+scripts/fork-deploy fleet --version 0.1.8-preview.20261104.1 --upstream-tag v0.1.8-nightly.20261104.4179
 ```
 
 Use a new version every time. The script requires both SSH hosts to be reachable,
@@ -35,9 +35,13 @@ Transfer caches use plain tar so rsync can reuse matching native-dependency bloc
 the wire stream is compressed, and the complete tar checksum is checked afterward.
 
 Project folders are off by default because that beta layout disables thread
-dragging. Rebuilds preserve existing Labs choices. Use `--disable-project-folders`
-once to turn folders off in M5's existing desktop preferences during installation.
-Browser and mobile preferences can override the defaults on each device.
+dragging. Rebuilds preserve existing Labs choices. Change folder settings in the
+app; browser and mobile preferences can override defaults on each device.
+
+The launcher compiles `native/fork-deploy` with the locked Rust dependencies.
+Full fleet updates send the small Rust crate M5 → J → M3 and compile its host
+commands with each host's already-installed toolchain. No Python runtime is used.
+Focused helper tests: `cargo test --locked --manifest-path native/fork-deploy/Cargo.toml`.
 
 Backups of the database, previous service definitions and M5 app/preferences are
 under `~/.t3/backups/fleet/<version>` on each host. Incomplete staging does not
