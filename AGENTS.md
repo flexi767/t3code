@@ -100,7 +100,8 @@ An empty database is a bad test. Seed your worktree's `.t3` with a copy of real 
 
 ### Personal fork fleet
 
-For this fork, rebuild and install through `python3 scripts/rebuild-fleet.py --version <unique-preview-version> --upstream-tag <exact-upstream-tag>`.
+For web-only changes on M5, use `python3 scripts/update-ui.py` and reload the window; CLI versions and active servers stay unchanged.
+For server, shared-contract or dependency changes, rebuild and install through `python3 scripts/rebuild-fleet.py --version <unique-preview-version> --upstream-tag <exact-upstream-tag>`.
 It stages and verifies M5, M3 and J together before switching the desktop app.
 Do not install a separately versioned desktop or omit the SSH `.install-complete` marker.
 Keep the local persistent signing identity in ignored `.env.local` and preserve T3 Connect configuration.
