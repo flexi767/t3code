@@ -2,6 +2,7 @@
 """Build and stage one signed fork version on M5, M3 and J before activating it."""
 import argparse
 import hashlib
+import gzip
 import json
 import os
 from pathlib import Path
@@ -51,7 +52,7 @@ def stage(ver, archive):
         raise RuntimeError(f"Version already exists: {target}; use a new version")
     target.mkdir(parents=True)
     # Archives are built locally from checksum-verified upstream runtime assets.
-    run("tar", "-xzf", archive, "--strip-components=1", "-C", target)
+    run("tar", "-xf", archive, "--strip-components=1", "-C", target)
     if output(target / "t3", "--version") != f"t3 v{ver}":
         raise RuntimeError("Staged CLI version does not match the desktop")
     if not (target / "client/index.html").is_file():
@@ -137,14 +138,23 @@ def distribute(ver, archives):
     run("scp", *ssh_options, __file__, f"{ssh_route('j')}:{helper}")
     remote_archives = {}
     for platform in ["linux-x64", "darwin-arm64"]:
-        destination = f"/tmp/t3-fleet-{ver}-{platform}.tar.gz"
-        run("rsync", "-a", "--partial", "--inplace", "-e", transport,
-            archives[platform], f"{ssh_route('j')}:{destination}")
+        # Gzip hides matching blocks from rsync. Keep plain tar caches on J/M3
+        # so subsequent builds transfer changed blocks instead of native dependencies.
+        plain = archives[platform].with_suffix("")
+        with gzip.open(archives[platform], "rb") as source, plain.open("wb") as target:
+            shutil.copyfileobj(source, target)
+        destination = f"/tmp/t3-fleet-{ver}-{platform}.tar"
+        seed_transfer_cache("j", destination, platform)
+        run("rsync", "-az", "--partial", "--inplace", "-e", transport,
+            plain, f"{ssh_route('j')}:{destination}")
         remote_archives[platform] = destination
+        archives[platform] = plain
     # M3 already trusts/authenticates to its `j` alias. Package bytes travel J -> M3.
     for source in [helper, remote_archives["darwin-arm64"]]:
+        if source.endswith(".tar"):
+            seed_transfer_cache("m3", source, "darwin-arm64")
         run("ssh", *ssh_options, ssh_route("m3"), shlex.join([
-            "rsync", "-a", "--partial", "--inplace", "-e", transport,
+            "rsync", "-az", "--partial", "--inplace", "-e", transport,
             f"j:{source}", "/tmp/",
         ]))
     for host, platform in [("j", "linux-x64"), ("m3", "darwin-arm64")]:
@@ -154,6 +164,17 @@ def distribute(ver, archives):
         run("ssh", *ssh_options, ssh_route(host), shlex.join(["python3", "-c", check]))
         remote(host, helper, "host-stage", "--version", ver, "--archive", remote_archives[platform])
     return helper
+
+
+def seed_transfer_cache(host, destination, platform):
+    # Only transfer caches are copied; installed immutable runtimes are untouched.
+    code = (
+        "from pathlib import Path; import shutil; "
+        f"target=Path({destination!r}); "
+        f"previous=sorted((p for p in Path('/tmp').glob('t3-fleet-*-{platform}.tar') if p != target), key=lambda p:p.stat().st_mtime, reverse=True); "
+        "shutil.copyfile(previous[0], target) if not target.exists() and previous else None"
+    )
+    run("ssh", "-o", "ConnectTimeout=8", ssh_route(host), shlex.join(["python3", "-c", code]))
 
 
 def rebuild(ver, upstream, disable_project_folders=False):

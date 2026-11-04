@@ -23,6 +23,8 @@ unresponsive connections instead of leaving a transfer hanging indefinitely.
 M5 uploads both runtime packages to J. M3 pulls its Mac package and the staging
 helper from J using its existing `j` SSH alias. Each final host verifies its
 archive SHA-256 before staging. M5 never sends the large package directly to M3.
+Transfer caches use plain tar so rsync can reuse matching native-dependency blocks;
+the wire stream is compressed, and the complete tar checksum is checked afterward.
 
 Project folders are off by default because that beta layout disables thread
 dragging. Rebuilds preserve existing Labs choices. Use `--disable-project-folders`
