@@ -160,7 +160,13 @@ def distribute(ver, archives):
     for host, platform in [("j", "linux-x64"), ("m3", "darwin-arm64")]:
         expected = hashlib.file_digest(archives[platform].open("rb"), "sha256").hexdigest()
         # Verify the archive again on the final host before extracting/installing it.
-        check = f"import hashlib; from pathlib import Path; assert hashlib.file_digest(Path({remote_archives[platform]!r}).open('rb'), 'sha256').hexdigest() == {expected!r}, 'Fleet archive checksum mismatch'"
+        check = (
+            "import hashlib\ndigest = hashlib.sha256()\n"
+            f"with open({remote_archives[platform]!r}, 'rb') as source:\n"
+            "    for chunk in iter(lambda: source.read(1024 * 1024), b''):\n"
+            "        digest.update(chunk)\n"
+            f"assert digest.hexdigest() == {expected!r}, 'Fleet archive checksum mismatch'"
+        )
         run("ssh", *ssh_options, ssh_route(host), shlex.join(["python3", "-c", check]))
         remote(host, helper, "host-stage", "--version", ver, "--archive", remote_archives[platform])
     return helper
