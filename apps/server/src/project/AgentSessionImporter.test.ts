@@ -3,10 +3,12 @@ import {
   type AgentSessionSource,
   type ServerSettingsError,
   EventId,
+  MessageId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  TurnItemId,
   type ApplicationStoredEvent,
   type OrchestrationV2AppThread,
   type OrchestrationV2ProviderThread,
@@ -79,8 +81,13 @@ function candidate(
       updatedAt: timestamp,
       omittedMessageCount: 0,
       messages: [
-        { role: "user" as const, text: "Fix it", createdAt: timestamp },
-        { role: "assistant" as const, text: "Fixed", createdAt: timestamp },
+        { role: "user" as const, text: "Fix it", createdAt: timestamp, sourcePosition: 0 },
+        {
+          role: "assistant" as const,
+          text: "Fixed",
+          createdAt: timestamp,
+          sourcePosition: 1,
+        },
       ],
     },
   } satisfies AgentSessionScanner.AgentSessionRecentThread;
@@ -422,6 +429,102 @@ it.effect(
         runtimePayload: { importedTranscripts: [source.source] },
       });
     }).pipe(Effect.scoped, Effect.provide(persistence)),
+);
+
+it.effect("appends unseen transcript messages without disturbing local thread activity", () =>
+  Effect.gen(function* () {
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const sink = yield* EventSink.EventSinkV2;
+    const source = candidate(CODEX_MODEL_SELECTION, "continued");
+    const threadId = importId(source);
+    const initialImporter = yield* makeImporter([source]);
+    expect(yield* initialImporter.run).toEqual({ importedCount: 1, skippedCount: 0 });
+    const initial = yield* projections.getThreadRecords(threadId, ["messages"]);
+
+    yield* sink.write({
+      events: [
+        {
+          id: EventId.make("local-message"),
+          type: "message.updated",
+          threadId,
+          occurredAt: now,
+          payload: {
+            createdBy: "user",
+            creationSource: "web",
+            id: MessageId.make("local-message"),
+            threadId,
+            runId: null,
+            nodeId: null,
+            role: "user",
+            text: "T3-only note",
+            attachments: [],
+            streaming: false,
+            createdAt: now,
+            updatedAt: now,
+          },
+        },
+        {
+          id: EventId.make("local-turn-item"),
+          type: "turn-item.updated",
+          threadId,
+          occurredAt: now,
+          payload: {
+            id: TurnItemId.make("local-turn-item"),
+            threadId,
+            runId: null,
+            nodeId: null,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal: 3,
+            status: "completed",
+            title: null,
+            startedAt: now,
+            completedAt: now,
+            updatedAt: now,
+            createdBy: "user",
+            creationSource: "web",
+            type: "user_message",
+            messageId: MessageId.make("local-message"),
+            inputIntent: "turn_start",
+            text: "T3-only note",
+            attachments: [],
+          },
+        },
+      ],
+    });
+
+    const continued = candidate(CODEX_MODEL_SELECTION, "continued");
+    continued.source.size = 200;
+    continued.source.mtimeMs = 3;
+    continued.thread.messages.push(
+      { role: "user", text: "One more question", createdAt: timestamp, sourcePosition: 20 },
+      { role: "assistant", text: "One more answer", createdAt: timestamp, sourcePosition: 21 },
+    );
+    const refreshImporter = yield* makeImporter([continued]);
+    expect(yield* refreshImporter.run).toEqual({ importedCount: 1, skippedCount: 0 });
+
+    const refreshed = yield* projections.getThreadRecords(threadId, ["messages"]);
+    expect(refreshed.messages.map(({ text }) => text)).toEqual([
+      "Fix it",
+      "Fixed",
+      "T3-only note",
+      "One more question",
+      "One more answer",
+    ]);
+    expect(refreshed.messages.slice(0, 2).map(({ id }) => id)).toEqual(
+      initial.messages.map(({ id }) => id),
+    );
+    expect(refreshed.messages.slice(-2).map(({ id }) => id)).toEqual([
+      `${threadId}:refresh-00000020`,
+      `${threadId}:refresh-00000021`,
+    ]);
+
+    expect(yield* refreshImporter.run).toEqual({ importedCount: 1, skippedCount: 0 });
+    const repeated = yield* projections.getThreadRecords(threadId, ["messages"]);
+    expect(repeated.messages.map(({ id }) => id)).toEqual(refreshed.messages.map(({ id }) => id));
+  }).pipe(Effect.scoped, Effect.provide(persistence)),
 );
 
 it.effect("imports under a policy ceiling in the project's default, kept under the ceiling", () =>

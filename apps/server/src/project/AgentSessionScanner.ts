@@ -161,6 +161,7 @@ export interface AgentSessionThreadMessage {
   readonly role: "user" | "assistant";
   readonly text: string;
   readonly createdAt: string;
+  readonly sourcePosition: number;
 }
 
 export interface AgentSessionThread {
@@ -509,6 +510,7 @@ function parseAgentSessionRecords(
         role: record.message.role,
         text,
         createdAt: normalizeTimestamp(record.timestamp, fallbackTimestamp),
+        sourcePosition: recordIndex,
         codexResponseUser: false,
       });
       continue;
@@ -522,6 +524,7 @@ function parseAgentSessionRecords(
         role: record.type,
         text,
         createdAt: normalizeTimestamp(record.timestamp, fallbackTimestamp),
+        sourcePosition: recordIndex,
         codexResponseUser: false,
       });
       continue;
@@ -557,6 +560,7 @@ function parseAgentSessionRecords(
         role: "user",
         text,
         createdAt: normalizeTimestamp(record.timestamp, fallbackTimestamp),
+        sourcePosition: recordIndex,
         codexResponseUser: false,
       });
       continue;
@@ -581,6 +585,7 @@ function parseAgentSessionRecords(
       role: record.payload.role,
       text: extractedText,
       createdAt: normalizeTimestamp(record.timestamp, fallbackTimestamp),
+      sourcePosition: recordIndex,
       codexResponseUser: record.payload.role === "user",
     });
   }

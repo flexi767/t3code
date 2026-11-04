@@ -91,14 +91,13 @@ function dateTime(value: string): DateTime.Utc {
 
 function messageEvents(input: {
   readonly threadId: ThreadId;
-  readonly index: number;
+  readonly ordinal: number;
+  readonly suffix: string;
   readonly message: AgentSessionScanner.AgentSessionThreadMessage;
 }): ReadonlyArray<OrchestrationV2DomainEvent> {
-  const ordinal = input.index + 1;
-  const suffix = String(input.index).padStart(6, "0");
-  const messageId = MessageId.make(`${input.threadId}:${suffix}`);
+  const messageId = MessageId.make(`${input.threadId}:${input.suffix}`);
   const turnItemId = TurnItemId.make(
-    `${IMPORT_EVENT_PREFIX}:turn-item:${input.threadId}:${suffix}`,
+    `${IMPORT_EVENT_PREFIX}:turn-item:${input.threadId}:${input.suffix}`,
   );
   const at = dateTime(input.message.createdAt);
   const message: OrchestrationV2ConversationMessage = {
@@ -124,7 +123,7 @@ function messageEvents(input: {
     providerTurnId: null,
     nativeItemRef: null,
     parentItemId: null,
-    ordinal,
+    ordinal: input.ordinal,
     status: "completed" as const,
     title: null,
     startedAt: at,
@@ -152,20 +151,76 @@ function messageEvents(input: {
         };
   return [
     {
-      id: EventId.make(`${IMPORT_EVENT_PREFIX}:message:${input.threadId}:${suffix}`),
+      id: EventId.make(`${IMPORT_EVENT_PREFIX}:message:${input.threadId}:${input.suffix}`),
       type: "message.updated",
       threadId: input.threadId,
       occurredAt: at,
       payload: message,
     },
     {
-      id: EventId.make(`${IMPORT_EVENT_PREFIX}:turn-item:${input.threadId}:${suffix}`),
+      id: EventId.make(`${IMPORT_EVENT_PREFIX}:turn-item:${input.threadId}:${input.suffix}`),
       type: "turn-item.updated",
       threadId: input.threadId,
       occurredAt: at,
       payload: turnItem,
     },
   ];
+}
+
+function sameMessage(
+  imported: AgentSessionScanner.AgentSessionThreadMessage,
+  existing: OrchestrationV2ConversationMessage,
+): boolean {
+  return (
+    imported.role === existing.role &&
+    imported.text === existing.text &&
+    imported.createdAt === DateTime.formatIso(existing.createdAt)
+  );
+}
+
+function unseenImportedMessages(
+  imported: ReadonlyArray<AgentSessionScanner.AgentSessionThreadMessage>,
+  existing: ReadonlyArray<OrchestrationV2ConversationMessage>,
+): ReadonlyArray<AgentSessionScanner.AgentSessionThreadMessage> | null {
+  if (existing.length === 0) return null;
+  const matches = Array.from({ length: existing.length + 1 }, () =>
+    Array<number>(imported.length + 1).fill(0),
+  );
+  for (let existingIndex = 0; existingIndex < existing.length; existingIndex++) {
+    for (let importedIndex = 0; importedIndex < imported.length; importedIndex++) {
+      matches[existingIndex + 1]![importedIndex + 1] = sameMessage(
+        imported[importedIndex]!,
+        existing[existingIndex]!,
+      )
+        ? matches[existingIndex]![importedIndex]! + 1
+        : Math.max(
+            matches[existingIndex]![importedIndex + 1]!,
+            matches[existingIndex + 1]![importedIndex]!,
+          );
+    }
+  }
+  if (matches[existing.length]![imported.length] === 0) return null;
+  let existingIndex = existing.length;
+  let importedIndex = imported.length;
+  let cutoff = -1;
+  while (existingIndex > 0 && importedIndex > 0) {
+    if (sameMessage(imported[importedIndex - 1]!, existing[existingIndex - 1]!)) {
+      cutoff = Math.max(cutoff, importedIndex - 1);
+      existingIndex -= 1;
+      importedIndex -= 1;
+    } else if (
+      matches[existingIndex - 1]![importedIndex]! >= matches[existingIndex]![importedIndex - 1]!
+    ) {
+      existingIndex -= 1;
+    } else {
+      importedIndex -= 1;
+    }
+  }
+  return imported.slice(cutoff + 1);
+}
+
+function refreshSuffix(message: AgentSessionScanner.AgentSessionThreadMessage): string {
+  return `refresh-${String(message.sourcePosition).padStart(8, "0")}`;
 }
 
 const make = Effect.gen(function* () {
@@ -290,7 +345,9 @@ const make = Effect.gen(function* () {
             },
             { onConflict: "ignore" },
           );
-          const existing = yield* Effect.option(orchestrator.getThreadRecords(threadId, []));
+          const existing = yield* Effect.option(
+            orchestrator.getThreadRecords(threadId, ["messages", "turnItems"]),
+          );
           if (Option.isSome(existing)) {
             if (existing.value.thread.projectId !== input.projectId) {
               return yield* new AgentSessionThreadProjectConflictError({
@@ -301,6 +358,38 @@ const make = Effect.gen(function* () {
             }
             if (existing.value.thread.historyOrigin !== "v1_import") {
               return yield* new AgentSessionThreadModifiedError({ threadId });
+            }
+            const importedPrefix = `${threadId}:`;
+            const importedMessages = existing.value.messages.filter((message) =>
+              message.id.startsWith(importedPrefix),
+            );
+            const unseen = unseenImportedMessages(thread.messages, importedMessages);
+            if (unseen === null) {
+              return yield* new AgentSessionThreadModifiedError({ threadId });
+            }
+            const localMessages = existing.value.messages.filter(
+              (message) => !message.id.startsWith(importedPrefix),
+            );
+            const append = unseen.filter(
+              (message) =>
+                !localMessages.some((existingMessage) => sameMessage(message, existingMessage)),
+            );
+            const firstOrdinal =
+              existing.value.turnItems.reduce(
+                (maximum, item) => Math.max(maximum, item.ordinal),
+                0,
+              ) + 1;
+            if (append.length > 0) {
+              yield* eventSink.write({
+                events: append.flatMap((message, index) =>
+                  messageEvents({
+                    threadId,
+                    ordinal: firstOrdinal + index,
+                    suffix: refreshSuffix(message),
+                    message,
+                  }),
+                ),
+              });
             }
             yield* persistRuntime;
             yield* runtimes.recordImportedTranscript({ threadId, source });
@@ -414,7 +503,12 @@ const make = Effect.gen(function* () {
                   ]
                 : []),
               ...thread.messages.flatMap((message, index) =>
-                messageEvents({ threadId, index, message }),
+                messageEvents({
+                  threadId,
+                  ordinal: index + 1,
+                  suffix: String(index).padStart(6, "0"),
+                  message,
+                }),
               ),
               {
                 id: EventId.make(`${IMPORT_EVENT_PREFIX}:provider-thread:${providerThreadId}`),
