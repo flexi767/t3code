@@ -1268,7 +1268,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               {inFolder ? null : (
                 <span
                   className={cn(
-                    "-mr-2.5 flex shrink-0 items-center transition-opacity",
+                    "flex shrink-0 items-center transition-opacity",
                     (!props.isActive || variantAction === "unsettle") &&
                       "opacity-40 grayscale group-focus-within/sidebar-row:opacity-100 group-focus-within/sidebar-row:grayscale-0 group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
                   )}
@@ -1467,7 +1467,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               {childGroupDisclosure}
               {draftIndicator}
               {props.project ? (
-                <ProjectFavicon project={props.project} className="-mr-1.5 size-4 shrink-0" />
+                <ProjectFavicon project={props.project} className="size-4 shrink-0" />
               ) : null}
               {title}
               {pinIndicator}
