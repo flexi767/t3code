@@ -62,28 +62,32 @@ function CheckoutDetails({
             </div>
             <div>Version committed: {date(details?.committedAt ?? null)}</div>
             <div>Checkout last updated: {date(details?.headUpdatedAt ?? null)}</div>
-            <div className="-ml-2">
-              <GitActionsControl
-                gitCwd={cwd}
-                activeThreadRef={threadRef}
-                menuOnlyLabel={behindLabel}
-                showChanges={false}
-              />
-              {status?.hasWorkingTreeChanges ? (
-                <GitActionsControl
-                  gitCwd={cwd}
-                  activeThreadRef={threadRef}
-                  showActions={false}
-                  onOpenChanges={onOpenChanges}
-                />
-              ) : null}
-            </div>
-            <div className="text-muted-foreground">
-              Compared with the locally fetched origin/main.
-            </div>
           </>
         )}
       </div>
+      {status?.isRepo ? (
+        <>
+          <div className="col-span-2 -mx-2.5 [&_button]:gap-2 [&_button>svg:first-child]:size-3">
+            <GitActionsControl
+              gitCwd={cwd}
+              activeThreadRef={threadRef}
+              menuOnlyLabel={behindLabel}
+              showChanges={false}
+            />
+            {status?.hasWorkingTreeChanges ? (
+              <GitActionsControl
+                gitCwd={cwd}
+                activeThreadRef={threadRef}
+                showActions={false}
+                onOpenChanges={onOpenChanges}
+              />
+            ) : null}
+          </div>
+          <div className="col-start-2 text-muted-foreground">
+            Compared with the locally fetched origin/main.
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }
