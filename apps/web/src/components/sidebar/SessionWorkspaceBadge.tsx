@@ -1,5 +1,7 @@
-import { type EnvironmentId } from "@t3tools/contracts";
+import { type EnvironmentId, type ScopedThreadRef } from "@t3tools/contracts";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { GitBranchIcon } from "lucide-react";
+import GitActionsControl from "../GitActionsControl";
 import { ThreadWorktreeIndicator } from "../ThreadStatusIndicators";
 import { useEnvironmentQuery } from "../../state/query";
 import { vcsEnvironment } from "../../state/vcs";
@@ -9,10 +11,14 @@ function CheckoutDetails({
   environmentId,
   cwd,
   heading,
+  threadRef,
+  onOpenChanges,
 }: {
   environmentId: EnvironmentId;
   cwd: string;
   heading: string;
+  threadRef: ScopedThreadRef;
+  onOpenChanges: () => void;
 }) {
   const query = useEnvironmentQuery(
     vcsEnvironment.status({
@@ -22,7 +28,19 @@ function CheckoutDetails({
   );
   const status = query.data;
   const details = status?.checkoutDetails;
-  const date = (value: string | null) => (value ? new Date(value).toLocaleString() : "Unavailable");
+  const date = (value: string | null) =>
+    value
+      ? new Intl.DateTimeFormat(undefined, {
+          dateStyle: "short",
+          timeStyle: "medium",
+        }).format(new Date(value))
+      : "Unavailable";
+  const behindLabel =
+    details?.behindOriginMain == null
+      ? "origin/main comparison unavailable"
+      : details.behindOriginMain === 0
+        ? "Up to date with origin/main"
+        : `${details.behindOriginMain} commits behind origin/main`;
   return (
     <div className="grid min-w-0 grid-cols-[0.75rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs">
       <GitBranchIcon aria-hidden className="mt-0.5 size-3 shrink-0" />
@@ -44,14 +62,22 @@ function CheckoutDetails({
             </div>
             <div>Version committed: {date(details?.committedAt ?? null)}</div>
             <div>Checkout last updated: {date(details?.headUpdatedAt ?? null)}</div>
-            <div>
-              {details?.behindOriginMain == null
-                ? "origin/main comparison unavailable"
-                : details.behindOriginMain === 0
-                  ? "Up to date with origin/main"
-                  : `${details.behindOriginMain} commits behind origin/main`}
+            <div className="-ml-2">
+              <GitActionsControl
+                gitCwd={cwd}
+                activeThreadRef={threadRef}
+                menuOnlyLabel={behindLabel}
+                showChanges={false}
+              />
+              {status?.hasWorkingTreeChanges ? (
+                <GitActionsControl
+                  gitCwd={cwd}
+                  activeThreadRef={threadRef}
+                  showActions={false}
+                  onOpenChanges={onOpenChanges}
+                />
+              ) : null}
             </div>
-            {status?.hasWorkingTreeChanges ? <div>Uncommitted changes</div> : null}
             <div className="text-muted-foreground">
               Compared with the locally fetched origin/main.
             </div>
@@ -65,9 +91,11 @@ function CheckoutDetails({
 export function SessionWorkspaceDetails({
   thread,
   workspaceRoot,
+  onOpenChanges,
 }: {
   thread: SidebarThreadSummary;
   workspaceRoot: string | null;
+  onOpenChanges: () => void;
 }) {
   const cwd = thread.worktreePath ?? workspaceRoot;
   return (
@@ -76,6 +104,8 @@ export function SessionWorkspaceDetails({
         <CheckoutDetails
           environmentId={thread.environmentId}
           cwd={cwd}
+          threadRef={scopeThreadRef(thread.environmentId, thread.id)}
+          onOpenChanges={onOpenChanges}
           heading={
             thread.worktreePath
               ? `Worktree: ${thread.worktreePath.split(/[\\/]/).at(-1)}`
@@ -89,6 +119,8 @@ export function SessionWorkspaceDetails({
         <CheckoutDetails
           environmentId={thread.environmentId}
           cwd={workspaceRoot}
+          threadRef={scopeThreadRef(thread.environmentId, thread.id)}
+          onOpenChanges={onOpenChanges}
           heading="Main checkout"
         />
       ) : null}

@@ -64,6 +64,7 @@ import {
 } from "react";
 
 import { useRightPanelStore } from "../../rightPanelStore";
+import { useDiffPanelStore } from "../../diffPanelStore";
 import { useOpenPrLink } from "../../lib/openPullRequestLink";
 import { useUiStateStore } from "../../uiStateStore";
 import { useThreadSelectionStore } from "../../threadSelectionStore";
@@ -244,6 +245,7 @@ function SidebarThreadTooltip({
   branchMismatch,
   terminalStatus,
   terminalProcessCount,
+  onThreadActivate,
 }: {
   thread: SidebarThreadSummary;
   project: ProjectFaviconProject | null;
@@ -261,12 +263,19 @@ function SidebarThreadTooltip({
   } | null;
   terminalStatus: TerminalStatusIndicator | null;
   terminalProcessCount: number;
+  onThreadActivate: (threadRef: ScopedThreadRef) => void;
 }) {
   const driverKind = providerEntry?.driverKind ?? null;
   const previousProviderNames = thread.providerInstanceHistory
     .filter((instanceId) => instanceId !== modelInstanceId)
     .map((instanceId) => providerEntryByInstanceId.get(instanceId)?.displayName ?? instanceId);
   const supportsMultiplePullRequests = useSupportsMultiplePullRequests(thread.environmentId);
+  const threadRef = scopeThreadRef(thread.environmentId, thread.id);
+  const handleOpenChanges = () => {
+    useDiffPanelStore.getState().selectGitScope(threadRef, "branch");
+    useRightPanelStore.getState().open(threadRef, "diff");
+    onThreadActivate(threadRef);
+  };
   return (
     <ThreadHoverCardPopup side="right" align="start" sideOffset={4}>
       <ThreadHoverCard
@@ -322,7 +331,11 @@ function SidebarThreadTooltip({
             <span className="text-foreground/75">{modelLabel}</span>
           </div>
         ) : null}
-        <SessionWorkspaceDetails thread={thread} workspaceRoot={project?.workspaceRoot ?? null} />
+        <SessionWorkspaceDetails
+          thread={thread}
+          workspaceRoot={project?.workspaceRoot ?? null}
+          onOpenChanges={handleOpenChanges}
+        />
         {previousProviderNames.length > 0 ? (
           <div className="flex min-w-0 items-center gap-2">
             <ArrowRightLeftIcon className="size-3 shrink-0 stroke-muted-foreground" />
@@ -818,6 +831,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       branchMismatch={branchMismatch}
       terminalStatus={terminalStatus}
       terminalProcessCount={terminalProcessCount}
+      onThreadActivate={onThreadActivate}
     />
   );
 
@@ -1784,6 +1798,7 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
           branchMismatch={branchMismatch}
           terminalStatus={terminalStatus}
           terminalProcessCount={runningTerminalIds.length}
+          onThreadActivate={() => props.onSelect()}
         />
       </Tooltip>
     </li>

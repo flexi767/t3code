@@ -121,6 +121,7 @@ interface GitActionsControlProps {
   showActions?: boolean;
   showChanges?: boolean;
   onOpenChanges?: () => void;
+  menuOnlyLabel?: string;
 }
 
 interface PendingDefaultBranchAction {
@@ -932,6 +933,7 @@ export default function GitActionsControl({
   showActions = true,
   showChanges = true,
   onOpenChanges,
+  menuOnlyLabel,
 }: GitActionsControlProps) {
   const panelAnchorRef = useRef<HTMLDivElement | null>(null);
   const updateThreadMetadata = useAtomCommand(
@@ -1498,6 +1500,36 @@ export default function GitActionsControl({
             {initAction.isPending ? "Initializing..." : "Initialize Git"}
           </span>
         </ThreadDetailsControl>
+      ) : menuOnlyLabel ? (
+        <Menu
+          onOpenChange={(open) => {
+            if (open) {
+              requestVcsStatusRefresh(refreshVcsStatus, activeEnvironmentId, gitCwd);
+            }
+          }}
+        >
+          <MenuTrigger
+            render={
+              <ThreadDetailsControl
+                aria-label={`${menuOnlyLabel}, Git action options`}
+                size="sm"
+                variant="ghost"
+                part="row"
+                panel
+              />
+            }
+            disabled={isGitActionRunning}
+          >
+            <GitCommitIcon className={THREAD_DETAILS_PANEL_ICON_CLASS} aria-hidden />
+            <span className={cn("flex-1 text-left", THREAD_DETAILS_PANEL_LABEL_CLASS)}>
+              {menuOnlyLabel}
+            </span>
+            <ChevronDownIcon aria-hidden className={THREAD_DETAILS_PANEL_CHEVRON_CLASS} />
+          </MenuTrigger>
+          <MenuPopup align="start" className="min-w-56">
+            {gitItems}
+          </MenuPopup>
+        </Menu>
       ) : quietEmptyDraft || (compact && !gitActionProgress && !visibleInlineSuccess) ? null : (
         <div
           role="group"

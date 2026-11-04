@@ -7,7 +7,7 @@ export function ThreadHoverCardPopup({ className, ...props }: ComponentProps<typ
     <TooltipPopup
       {...props}
       variant="glass"
-      className={cn("max-w-80 text-left whitespace-normal", className)}
+      className={cn("pointer-events-auto max-w-80 text-left whitespace-normal", className)}
     />
   );
 }
