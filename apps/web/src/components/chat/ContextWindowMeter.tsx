@@ -112,7 +112,7 @@ export function ContextWindowMeter(props: {
       <PopoverPopup
         {...composerFloatingLayerProps}
         tooltipStyle
-        side="top"
+        side={props.compact ? "bottom" : "top"}
         align="end"
         padding="none"
         width="auto"
