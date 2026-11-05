@@ -192,7 +192,7 @@ fn idle_at(db: &Path) -> Result<()> {
             &[
                 "-readonly",
                 s(db),
-                "SELECT count(*) FROM orchestration_v2_projection_runs WHERE status IN ('running','preparing','waiting')",
+                "SELECT count(*) FROM orchestration_v2_projection_runs WHERE status IN ('queued','preparing','starting','running','waiting')",
             ],
         )?;
         if count != "0" {
@@ -1021,6 +1021,17 @@ mod tests {
             .unwrap(),
             "2"
         );
+        for status in ["queued", "starting"] {
+            run(
+                "sqlite3",
+                &[
+                    s(&db),
+                    &format!("UPDATE orchestration_v2_projection_runs SET status = '{status}'"),
+                ],
+            )
+            .unwrap();
+            assert!(idle_at(&db).is_err());
+        }
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]
