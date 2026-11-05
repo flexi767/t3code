@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off - recovery tests exercise real Git worktrees in scoped temporary directories.
+import * as NodeChildProcess from "node:child_process";
+import * as NodePath from "node:path";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { PullRequestProviderError } from "@t3tools/source-control-core/server/PullRequestProvider";
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
@@ -57,6 +61,8 @@ import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadMoveService from "./ThreadMoveService.ts";
+import { movedId as movedThreadId } from "./threadMove.ts";
+import { threadHtmlRenderAttachmentIds } from "../attachmentStore.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as OrchestrationEventStore from "../persistence/OrchestrationEventStore.ts";
 import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
@@ -2232,39 +2238,81 @@ it.effect(
   () =>
     Effect.gen(function* () {
       let availableCommit = false;
-      const branches = new Set<string>();
+      let projectRoot = "";
+      let crashAfterCheckout = false;
+      let preparedPath = "";
+      const runGit = (cwd: string, args: ReadonlyArray<string>) =>
+        NodeChildProcess.execFileSync(
+          "git",
+          ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", ...args],
+          { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+        );
       const services = yield* Layer.build(
         Layer.mergeAll(
           layerTest,
           EventStore.layer,
           layerServerConfig,
           Layer.mock(GitVcsDriver.GitVcsDriver)({
-            resolveCommit: () => Effect.succeed({ commitSha: "a".repeat(40) }),
+            resolveCommit: ({ cwd, revision }) =>
+              Effect.sync(() => ({
+                commitSha: runGit(cwd, ["rev-parse", "--verify", revision]).trim(),
+              })),
+            listWorktreePaths: (cwd) =>
+              Effect.sync(() =>
+                runGit(cwd, ["worktree", "list", "--porcelain", "-z"])
+                  .split("\0")
+                  .filter((line) => line.startsWith("worktree "))
+                  .map((line) => line.slice(9)),
+              ),
+            execute: ({ cwd, args }) =>
+              Effect.sync(() => ({
+                stdout: runGit(cwd, args),
+                stderr: "",
+                exitCode: ChildProcessSpawner.ExitCode(0),
+                stdoutTruncated: false,
+                stderrTruncated: false,
+              })),
           }),
           Layer.mock(GitWorkflow.GitWorkflowService)({
             hasCommit: () => Effect.sync(() => availableCommit),
             fetchRemote: () => Effect.void,
-            createWorktree: ({ newRefName }) =>
+            listLocalBranchNames: (cwd) =>
+              Effect.sync(() =>
+                runGit(cwd, ["for-each-ref", "--format=%(refname:short)", "refs/heads"])
+                  .trim()
+                  .split("\n"),
+              ),
+            createWorktree: ({ cwd, newRefName, refName, path }) =>
               Effect.sync(() => {
-                const branch = newRefName ?? "detached";
-                if (branches.has(branch)) throw new Error("Branch already exists");
-                branches.add(branch);
-                return { worktree: { path: "/workspace/moved-worktree", refName: branch } };
+                if (!path) throw new Error("A move must name its managed path");
+                runGit(cwd, [
+                  "worktree",
+                  "add",
+                  ...(newRefName ? ["-b", newRefName] : []),
+                  path,
+                  refName,
+                ]);
+                preparedPath = path;
+                if (crashAfterCheckout) throw new Error("Simulated process exit after checkout");
+                return { worktree: { path, refName: newRefName ?? refName } };
               }),
-            removeWorktree: () => Effect.void,
-            deleteLocalBranch: ({ refName }) =>
+            removeWorktree: ({ cwd, path, force }) =>
               Effect.sync(() => {
-                branches.delete(refName);
+                runGit(cwd, ["worktree", "remove", ...(force ? ["--force"] : []), path]);
               }),
-            localStatus: () =>
-              Effect.succeed({
-                isRepo: false,
+            deleteLocalBranch: ({ cwd, refName }) =>
+              Effect.sync(() => {
+                runGit(cwd, ["branch", "-D", refName]);
+              }),
+            localStatus: ({ cwd }) =>
+              Effect.sync(() => ({
+                isRepo: true,
                 hasPrimaryRemote: false,
                 isDefaultRef: false,
-                refName: null,
-                hasWorkingTreeChanges: false,
+                refName: runGit(cwd, ["branch", "--show-current"]).trim(),
+                hasWorkingTreeChanges: runGit(cwd, ["status", "--porcelain"]).trim() !== "",
                 workingTree: { files: [], insertions: 0, deletions: 0 },
-              }),
+              })),
           }),
         ).pipe(
           Layer.provideMerge(SqlitePersistence.layerMemory),
@@ -2275,6 +2323,20 @@ it.effect(
       const sink = Context.get(services, EventSink.EventSinkV2);
       const config = Context.get(services, ServerConfig.ServerConfig);
       const fs = Context.get(services, FileSystem.FileSystem);
+      projectRoot = NodePath.join(config.worktreesDir, "repository");
+      yield* fs.makeDirectory(projectRoot, { recursive: true });
+      runGit(projectRoot, ["init", "--initial-branch=main"]);
+      runGit(projectRoot, [
+        "-c",
+        "user.name=T3 Test",
+        "-c",
+        "user.email=t3@example.test",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "Move fixture",
+      ]);
+      const sourceCommit = runGit(projectRoot, ["rev-parse", "HEAD"]).trim();
       const sourceEnvironment = EnvironmentId.make("source-machine");
       const targetEnvironment = EnvironmentId.make("destination-machine");
       const makeMoves = (environmentId: EnvironmentId) =>
@@ -2296,7 +2358,7 @@ it.effect(
       yield* seedProject({
         projectId,
         title: "Move project",
-        workspaceRoot: "/workspace",
+        workspaceRoot: projectRoot,
         defaultModelSelection: modelSelection,
         createdAt: DateTime.formatIso(now),
       }).pipe(Effect.provide(services));
@@ -2403,6 +2465,74 @@ it.effect(
         ],
       });
       const sideChatId = ThreadId.make("move:side-chat");
+      const ancestorId = ThreadId.make("move:ancestor");
+      const ancestorRun = RunId.make("move:ancestor-complete");
+      const savedSource = yield* orchestrator.getThreadProjection(sourceId);
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make("move:ancestor"),
+            threadId: ancestorId,
+            occurredAt: now,
+            type: "thread.created",
+            payload: {
+              ...savedSource.thread,
+              id: ancestorId,
+              projectId: ProjectId.make("move:missing-ancestor-project"),
+              worktreePath: "/removed/ancestor-worktree",
+              deletedAt: now,
+              linkOrigin: { sessionId: "snapshot-only", label: "Historical linked source" },
+              lineage: {
+                parentThreadId: null,
+                rootThreadId: ancestorId,
+                relationshipToParent: null,
+              },
+            },
+          },
+          {
+            id: EventId.make("move:ancestor-complete"),
+            threadId: ancestorId,
+            occurredAt: now,
+            type: "run.created",
+            payload: {
+              ...savedSource.runs[0]!,
+              id: ancestorRun,
+              threadId: ancestorId,
+              userMessageId: MessageId.make("move:ancestor-message"),
+            },
+          },
+          {
+            id: EventId.make("move:ancestor-running"),
+            threadId: ancestorId,
+            occurredAt: now,
+            type: "run.created",
+            payload: {
+              ...savedSource.runs[0]!,
+              id: RunId.make("move:ancestor-active"),
+              ordinal: 2,
+              threadId: ancestorId,
+              userMessageId: MessageId.make("move:ancestor-later"),
+              status: "running",
+              completedAt: null,
+            },
+          },
+          {
+            id: EventId.make("move:ancestor-link"),
+            threadId: sourceId,
+            occurredAt: now,
+            type: "thread.metadata-updated",
+            payload: {
+              ...savedSource.thread,
+              forkedFrom: { type: "run", threadId: ancestorId, runId: ancestorRun },
+              lineage: {
+                parentThreadId: ancestorId,
+                relationshipToParent: "fork",
+                rootThreadId: ancestorId,
+              },
+            },
+          },
+        ],
+      });
       const htmlId = "thread-move-full-history-22222222-2222-4222-a222-222222222222-html";
       yield* fs.writeFileString(`${config.attachmentsDir}/${htmlId}.html`, "<p>saved render</p>");
       yield* sink.write({
@@ -2454,11 +2584,51 @@ it.effect(
         createdBy: "user",
         creationSource: "web",
       });
+      const sideHtmlId = "move-side-chat-33333333-3333-4333-a333-333333333333-html";
+      yield* fs.writeFileString(
+        `${config.attachmentsDir}/${sideHtmlId}.html`,
+        "<p>child-owned render</p>",
+      );
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make("move:child-render"),
+            threadId: sideChatId,
+            occurredAt: now,
+            type: "turn-item.updated",
+            payload: {
+              id: TurnItemId.make("move:child-render"),
+              type: "dynamic_tool",
+              ordinal: 1,
+              threadId: sideChatId,
+              runId: null,
+              nodeId: null,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              title: null,
+              status: "completed",
+              startedAt: now,
+              completedAt: now,
+              updatedAt: now,
+              toolName: "html_render",
+              input: {},
+              output: JSON.stringify({
+                htmlRender: { attachmentId: sideHtmlId, title: "Child render", height: 300 },
+              }),
+            },
+          },
+        ],
+      });
       let bundle = yield* source.export({
         threadId: sourceId,
         transferId: "f1616321-3e1c-41fb-8357-d1d3dc4eae42",
       });
-      assert.equal(bundle.assets.length, 2);
+      assert.equal(bundle.assets.length, 3);
+      assert.isFalse(
+        bundle.projections.find((entry) => entry.projection.thread.id === ancestorId)!.move,
+      );
       assert.isTrue(
         bundle.projections.some((entry) => entry.move && entry.projection.thread.id === sideChatId),
       );
@@ -2486,7 +2656,7 @@ it.effect(
       availableCommit = true;
       bundle = {
         ...bundle,
-        projections: bundle.projections.map((entry) => ({ ...entry, commitSha: "a".repeat(40) })),
+        projections: bundle.projections.map((entry) => ({ ...entry, commitSha: sourceCommit })),
       };
       const failedCopy = yield* destination
         .receive({
@@ -2495,9 +2665,70 @@ it.effect(
         })
         .pipe(Effect.flip);
       assert.include(failedCopy.message, "Invalid attachment encoding");
+      crashAfterCheckout = true;
+      const crashed = yield* destination.receive({ projectId, bundle }).pipe(Effect.exit);
+      assert.equal(crashed._tag, "Failure");
+      crashAfterCheckout = false;
+      const wrongSnapshot = yield* destination
+        .receive({
+          projectId,
+          bundle: {
+            ...bundle,
+            assets: [{ ...bundle.assets[0]!, data: "YQ==" }, ...bundle.assets.slice(1)],
+          },
+        })
+        .pipe(Effect.flip);
+      assert.include(wrongSnapshot.message, "different snapshot");
+      yield* fs.writeFileString(`${preparedPath}/preserve.txt`, "user changes after crash");
+      const dirtyPreparation = yield* destination.receive({ projectId, bundle }).pipe(Effect.flip);
+      assert.include(dirtyPreparation.message, "prepared checkout changed");
+      assert.equal(
+        yield* fs.readFileString(`${preparedPath}/preserve.txt`),
+        "user changes after crash",
+      );
+      yield* fs.remove(`${preparedPath}/preserve.txt`);
+      const commitReady = yield* Deferred.make<void>();
+      const releaseCommit = yield* Deferred.make<void>();
+      const write = sink.write;
+      using commitSpy = vi.spyOn(sink, "write").mockImplementation((input) =>
+        write(input).pipe(
+          Effect.tap(() => Deferred.succeed(commitReady, undefined)),
+          Effect.tap(() => Deferred.await(releaseCommit)),
+        ),
+      );
+      const receiving = yield* destination.receive({ projectId, bundle }).pipe(Effect.forkChild());
+      yield* Deferred.await(commitReady);
+      const cancelling = yield* Fiber.interrupt(receiving).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.succeed(releaseCommit, undefined);
+      yield* Fiber.join(cancelling);
+      commitSpy.mockRestore();
       const receipt = yield* destination.receive({ projectId, bundle });
       assert.deepEqual(yield* destination.receive({ projectId, bundle }), receipt);
       const imported = yield* orchestrator.getThreadProjection(receipt.destinationThreadId);
+      assert.isTrue(yield* fs.exists(imported.thread.worktreePath!));
+      const importedChild = yield* orchestrator.getThreadProjection(
+        ThreadId.make(movedThreadId(bundle.transferId, sideChatId)),
+      );
+      const ownedRenders = threadHtmlRenderAttachmentIds(
+        importedChild.thread.id,
+        importedChild.turnItems.filter((item) => item.type === "dynamic_tool"),
+      );
+      assert.equal(ownedRenders.length, 1);
+      assert.equal(
+        yield* fs.readFileString(`${config.attachmentsDir}/${ownedRenders[0]!}.html`),
+        "<p>child-owned render</p>",
+      );
+      const importedAncestor = yield* orchestrator.getThreadProjection(
+        ThreadId.make(movedThreadId(bundle.transferId, ancestorId)),
+      );
+      assert.isNotNull(importedAncestor.thread.archivedAt);
+      assert.equal(importedAncestor.runs.at(-1)?.status, "interrupted");
+      assert.equal(
+        (yield* orchestrator.getThreadProjection(ancestorId)).runs.at(-1)?.status,
+        "running",
+      );
       assert.equal(imported.messages.length, 1);
       assert.equal(imported.runs.length, 1);
       const renderItem = imported.turnItems.find((item) => item.type === "dynamic_tool");

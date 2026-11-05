@@ -56,7 +56,7 @@ export function movedToolOutput(item: ToolItem, assets: ReadonlyMap<string, stri
 }
 
 export const THREAD_MOVE_MAX_BYTES = 32 * 1024 * 1024;
-const MAX_BUNDLE_BYTES = 64 * 1024 * 1024;
+const MAX_BUNDLE_BYTES = 63 * 1024 * 1024;
 const encodeProjection = Schema.encodeSync(OrchestrationV2ThreadProjectionJson);
 const decodeProjection = Schema.decodeUnknownSync(OrchestrationV2ThreadProjectionJson);
 const decodeEvent = Schema.decodeUnknownSync(OrchestrationV2DomainEvent);
@@ -95,7 +95,7 @@ export function validateMoveBundle(bundle: ThreadMoveBundle): void {
   });
   if (Buffer.byteLength(encoded) > MAX_BUNDLE_BYTES)
     throw new ThreadMoveError({
-      message: "Saved history and attachments exceed the 64 MB move limit.",
+      message: "Saved history and attachments exceed the 63 MB move limit.",
     });
 }
 
@@ -213,11 +213,64 @@ export function importedMoveProjections(
     // Runtime ownership and local credentials never travel with saved history.
     return {
       ...mapped,
+      ...(!move
+        ? {
+            runs: mapped.runs.map((row) =>
+              ["queued", "preparing", "starting", "running", "waiting"].includes(row.status)
+                ? {
+                    ...row,
+                    status: "interrupted" as const,
+                    completedAt: now,
+                    activeAttemptId: null,
+                  }
+                : row,
+            ),
+            attempts: mapped.attempts.map((row) =>
+              ["pending", "running"].includes(row.status)
+                ? { ...row, status: "interrupted" as const, completedAt: now }
+                : row,
+            ),
+            nodes: mapped.nodes.map((row) =>
+              ["pending", "running", "waiting"].includes(row.status)
+                ? { ...row, status: "interrupted" as const, completedAt: now }
+                : row,
+            ),
+            subagents: mapped.subagents.map((row) =>
+              ["pending", "running", "waiting", "idle"].includes(row.status)
+                ? { ...row, status: "cancelled" as const, completedAt: now }
+                : row,
+            ),
+            providerTurns: mapped.providerTurns.map((row) =>
+              ["pending", "running"].includes(row.status)
+                ? { ...row, status: "interrupted" as const, completedAt: now }
+                : row,
+            ),
+            runtimeRequests: mapped.runtimeRequests.map((row) => ({
+              ...row,
+              ...(row.status === "pending"
+                ? { status: "cancelled" as const, resolvedAt: now }
+                : {}),
+              responseCapability: {
+                type: "not_resumable" as const,
+                reason: "History snapshot from another machine.",
+              },
+            })),
+            contextTransfers: mapped.contextTransfers.map((row) =>
+              ["pending", "resolved_native", "resolved_portable"].includes(row.status)
+                ? { ...row, status: "superseded" as const }
+                : row,
+            ),
+          }
+        : {}),
       turnItems: mapped.turnItems.map((item, index) => {
         const original = projection.turnItems[index];
-        return item.type === "dynamic_tool" && original?.type === "dynamic_tool"
-          ? { ...item, output: movedToolOutput(original, assets) }
-          : item;
+        const frozen =
+          !move && ["pending", "running", "waiting"].includes(item.status)
+            ? { ...item, status: "interrupted" as const, completedAt: now }
+            : item;
+        return frozen.type === "dynamic_tool" && original?.type === "dynamic_tool"
+          ? { ...frozen, output: movedToolOutput(original, assets) }
+          : frozen;
       }),
       thread: {
         ...mapped.thread,

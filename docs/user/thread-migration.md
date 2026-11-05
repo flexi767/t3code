@@ -3,7 +3,9 @@
 ## Move a thread to another machine
 
 Connect both environments, then right-click a thread and choose **Move to another machine…**.
-Select a project on the destination. The desktop command palette and mobile thread menu offer
+Select a project on the destination. Each moved thread gets its own checkout, even when it shared
+one with its parent on the source. Fork ancestor snapshots are retained in the destination's Archive
+so inherited history can still be read. The desktop command palette and mobile thread menu offer
 the same action when both servers support it.
 
 Finish the thread and its subagents first. Commit and push workspace changes: the destination
@@ -13,12 +15,13 @@ or run the project's setup script in that worktree before continuing.
 The move copies saved messages, activity, attachments, and local subthreads. The first new turn
 starts a fresh provider conversation using a [portable handoff](./portable-handoffs.md); a live
 provider process and Git checkpoints do not move. The selected provider must be enabled on the
-destination. Transfers allow up to 32 MiB of attachments and 64 MiB of total saved data.
+destination. Transfers allow up to 32 MiB of attachments and 63 MiB of total saved data.
 
 T3 Code archives the original only after the destination confirms receipt. It remains recoverable
 in Archive. If the source changes or disconnects during the move, the destination copy remains
-saved and the source stays available. Retry a failed transfer from the same dialog to reconcile
-its saved copy.
+saved and the source stays available. Retry an import failure from the same dialog to reconcile
+its saved copy. If a completed copy reports that the source was kept, review that source and archive
+it manually when its remaining work is finished.
 
 ## Threads from older T3 Code versions
 

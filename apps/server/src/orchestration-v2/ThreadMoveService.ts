@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - portable attachment files are copied atomically inside the configured attachment root.
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
+import * as NodeCrypto from "node:crypto";
 import {
   CommandId,
   ThreadId,
@@ -28,6 +29,8 @@ import {
   resolveAttachmentPathById,
   parseAttachmentUuid,
   parseAttachmentFileExtension,
+  parseThreadSegmentFromAttachmentId,
+  toSafeThreadAttachmentSegment,
 } from "../attachmentStore.ts";
 import * as Threads from "./ThreadManagementService.ts";
 import * as Projects from "./ProjectStore.ts";
@@ -62,6 +65,18 @@ export class ThreadMoveService extends Context.Service<
 >()("t3/orchestration-v2/ThreadMoveService") {}
 
 const isMoveError = Schema.is(ThreadMoveError);
+const encodePreparation = Schema.encodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      digest: Schema.String,
+      projectId: Schema.String,
+      repository: Schema.String,
+      path: Schema.String,
+      branch: Schema.String,
+      commit: Schema.String,
+    }),
+  ),
+);
 const failed = (message: string) =>
   Effect.mapError((error: unknown) =>
     isMoveError(error) ? error : new ThreadMoveError({ message }),
@@ -87,6 +102,36 @@ function safeAssetPath(root: string, relative: string): string {
     throw new ThreadMoveError({ message: "Transfer attachments must be regular files." });
   }
   return path;
+}
+
+export function publishMoveFile(path: string, bytes: Uint8Array): void {
+  const temporary = `${path}.${NodeCrypto.randomUUID()}.part`;
+  try {
+    const fd = NodeFS.openSync(temporary, "wx", 0o600);
+    try {
+      NodeFS.writeFileSync(fd, bytes);
+      NodeFS.fsyncSync(fd);
+    } finally {
+      NodeFS.closeSync(fd);
+    }
+    try {
+      NodeFS.linkSync(temporary, path);
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+      const stat = NodeFS.lstatSync(path);
+      if (
+        stat.isSymbolicLink() ||
+        !stat.isFile() ||
+        !NodeFS.readFileSync(path).equals(Buffer.from(bytes))
+      ) {
+        throw new ThreadMoveError({
+          message: "A previous transfer file does not match this snapshot. Start a new move.",
+        });
+      }
+    }
+  } finally {
+    if (NodeFS.existsSync(temporary)) NodeFS.unlinkSync(temporary);
+  }
 }
 
 function relatedThreadIds(projection: OrchestrationV2ThreadProjection): ReadonlyArray<ThreadId> {
@@ -168,6 +213,12 @@ const make = Effect.gen(function* () {
       const { projection, snapshotSequence } = yield* threads
         .getThreadSnapshot(id)
         .pipe(failed("Could not export the full thread."));
+      if (!selected.has(id)) {
+        projections.push({ projection, sequence: snapshotSequence, move: false, commitSha: null });
+        for (const reference of relatedThreadIds(projection))
+          if (!seen.has(reference)) queue.push(reference);
+        continue;
+      }
       yield* attempt(() => assertMoveIdle(projection));
       const row = yield* project(projection.thread.projectId);
       const cwd = projection.thread.worktreePath ?? row.workspaceRoot;
@@ -262,6 +313,20 @@ const make = Effect.gen(function* () {
     bundle,
   }: ThreadMoveImportInput) {
     yield* attempt(() => validateMoveBundle(bundle));
+    yield* attempt(() => {
+      let bytes = 0;
+      for (const asset of bundle.assets) {
+        safeAssetPath(config.attachmentsDir, asset.path);
+        if (parseAttachmentUuid(asset.path.slice(0, asset.path.indexOf("."))) === null)
+          throw new ThreadMoveError({ message: "Invalid attachment identity." });
+        const data = Buffer.from(asset.data, "base64");
+        if (data.toString("base64") !== asset.data)
+          throw new ThreadMoveError({ message: "Invalid attachment encoding." });
+        bytes += data.length;
+        if (bytes > THREAD_MOVE_MAX_BYTES)
+          throw new ThreadMoveError({ message: "Transfer attachments exceed 32 MB." });
+      }
+    });
     if (
       bundle.sourceEnvironmentId === environmentId ||
       !bundle.projections.some(
@@ -313,7 +378,7 @@ const make = Effect.gen(function* () {
         const committed = { value: false };
         return yield* Effect.gen(function* () {
           for (const entry of bundle.projections) {
-            yield* attempt(() => assertMoveIdle(entry.projection));
+            if (entry.move) yield* attempt(() => assertMoveIdle(entry.projection));
             const enabled = yield* threads.isProviderInstanceEnabledForProject({
               projectId,
               instanceId: entry.projection.thread.providerInstanceId,
@@ -350,13 +415,119 @@ const make = Effect.gen(function* () {
                   "The source commit is not available on the destination. Push its branch first, then retry.",
               });
             }
-            const branch = `t3-move-${bundle.transferId.slice(0, 8)}-${movedId(bundle.transferId, entry.projection.thread.id).slice(0, 8)}`;
+            const movedThread = movedId(bundle.transferId, entry.projection.thread.id);
+            const branch = `t3-move-${bundle.transferId}-${movedThread}`;
+            const path = NodePath.join(config.worktreesDir, "thread-move", movedThread);
+            const intent = NodePath.join(
+              config.stateDir,
+              "thread-moves",
+              bundle.transferId,
+              `${movedThread}.json`,
+            );
+            const ownership = Buffer.from(
+              encodePreparation({
+                digest,
+                projectId,
+                repository: destination.workspaceRoot,
+                path,
+                branch,
+                commit: entry.commitSha,
+              }),
+            );
+            const branchExists = (yield* git
+              .listLocalBranchNames(destination.workspaceRoot)
+              .pipe(failed("Could not inspect prepared branches."))).includes(branch);
+            const pathStat = yield* attempt(() =>
+              NodeFS.lstatSync(path, { throwIfNoEntry: false }),
+            );
+            const ownsPreparation = yield* attempt(() => {
+              if (NodeFS.existsSync(intent)) {
+                const stat = NodeFS.lstatSync(intent);
+                if (
+                  stat.isSymbolicLink() ||
+                  !stat.isFile() ||
+                  !NodeFS.readFileSync(intent).equals(ownership)
+                )
+                  throw new ThreadMoveError({
+                    message:
+                      "This move's preparation belongs to a different snapshot or project. Start a new move.",
+                  });
+                return true;
+              }
+              if (branchExists || pathStat !== undefined)
+                throw new ThreadMoveError({
+                  message:
+                    "The destination checkout already exists without this move's ownership record. Start a new move.",
+                });
+              NodeFS.mkdirSync(NodePath.dirname(intent), { recursive: true });
+              NodeFS.mkdirSync(NodePath.dirname(path), { recursive: true });
+              publishMoveFile(intent, ownership);
+              return false;
+            });
+            if (ownsPreparation && pathStat !== undefined) {
+              if (!pathStat.isDirectory() || pathStat.isSymbolicLink())
+                return yield* new ThreadMoveError({
+                  message: "The prepared checkout is not a regular directory.",
+                });
+              const registered = yield* driver
+                .listWorktreePaths(destination.workspaceRoot)
+                .pipe(failed("Could not verify the prepared worktree."));
+              const status = yield* git
+                .localStatus({ cwd: path })
+                .pipe(failed("Could not verify the prepared checkout."));
+              const commit = yield* driver
+                .resolveCommit({ cwd: path, revision: "HEAD" })
+                .pipe(failed("Could not verify the prepared commit."));
+              const common = (cwd: string) =>
+                driver
+                  .execute({
+                    cwd,
+                    operation: "ThreadMove.verifyRepository",
+                    args: ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+                  })
+                  .pipe(
+                    Effect.map((result) => NodePath.resolve(result.stdout.trim())),
+                    failed("Could not verify repository ownership."),
+                  );
+              if (
+                !registered.includes(path) ||
+                !status.isRepo ||
+                status.hasWorkingTreeChanges ||
+                status.refName !== branch ||
+                commit.commitSha !== entry.commitSha ||
+                (yield* common(path)) !== (yield* common(destination.workspaceRoot))
+              ) {
+                return yield* new ThreadMoveError({
+                  message:
+                    "The prepared checkout changed or is incomplete. Keep its files and review it before retrying this move.",
+                });
+              }
+              created.push({ path, branch, commit: entry.commitSha });
+              checkouts.set(entry.projection.thread.id, { path, branch });
+              continue;
+            }
+            if (branchExists) {
+              const commit = yield* driver
+                .resolveCommit({ cwd: destination.workspaceRoot, revision: branch })
+                .pipe(failed("Could not verify the prepared branch."));
+              if (commit.commitSha !== entry.commitSha)
+                return yield* new ThreadMoveError({
+                  message: "The prepared branch changed. Keep it and start a new move.",
+                });
+              const registered = yield* driver
+                .listWorktreePaths(destination.workspaceRoot)
+                .pipe(failed("Could not inspect worktree registration."));
+              if (registered.includes(path))
+                yield* git
+                  .removeWorktree({ cwd: destination.workspaceRoot, path, force: true })
+                  .pipe(failed("Could not clear this move's missing worktree registration."));
+            }
             const checkout = yield* git
               .createWorktree({
                 cwd: destination.workspaceRoot,
-                refName: entry.commitSha,
-                newRefName: branch,
-                path: null,
+                refName: branchExists ? branch : entry.commitSha,
+                ...(branchExists ? {} : { newRefName: branch }),
+                path,
               })
               .pipe(failed("Could not prepare the destination worktree."));
             created.push({ path: checkout.worktree.path, branch, commit: entry.commitSha });
@@ -372,8 +543,13 @@ const make = Effect.gen(function* () {
               safeAssetPath(config.attachmentsDir, asset.path);
               const separator = asset.path.indexOf(".");
               const oldId = asset.path.slice(0, separator);
+              const segment = parseThreadSegmentFromAttachmentId(oldId);
+              const owner =
+                bundle.projections.find(
+                  (entry) => toSafeThreadAttachmentSegment(entry.projection.thread.id) === segment,
+                )?.projection.thread.id ?? bundle.sourceThreadId;
               const baseId = createDeterministicAttachmentId(
-                targetId,
+                movedId(bundle.transferId, owner),
                 `${bundle.transferId}:${oldId}`,
               );
               if (baseId === null || parseAttachmentUuid(oldId) === null)
@@ -391,13 +567,7 @@ const make = Effect.gen(function* () {
                 config.attachmentsDir,
                 `${id}${asset.path.slice(separator)}`,
               );
-              if (NodeFS.existsSync(path)) {
-                if (!NodeFS.readFileSync(path).equals(data))
-                  throw new ThreadMoveError({
-                    message:
-                      "A previous attachment copy does not match this snapshot. Start a new move.",
-                  });
-              } else NodeFS.writeFileSync(path, data, { flag: "wx", mode: 0o600 });
+              publishMoveFile(path, data);
             }
           });
           const now = yield* DateTime.now;
@@ -408,10 +578,15 @@ const make = Effect.gen(function* () {
             moveProjectionEvents(projections, bundle.transferId, digest),
           );
           // All records commit together. Event replay builds projections but starts no provider effects.
-          yield* sink
-            .write({ events })
-            .pipe(failed("Could not commit the destination history. The source is unchanged."));
-          committed.value = true;
+          yield* sink.write({ events }).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                committed.value = true;
+              }),
+            ),
+            Effect.uninterruptible,
+            failed("Could not commit the destination history. The source is unchanged."),
+          );
           return receipt;
         }).pipe(
           Effect.ensuring(
