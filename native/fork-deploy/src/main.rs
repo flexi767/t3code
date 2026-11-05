@@ -14,6 +14,60 @@ use std::{
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
+const CONNECT_KEYS: [&str; 3] = [
+    "T3CODE_RELAY_URL",
+    "T3CODE_CLERK_PUBLISHABLE_KEY",
+    "T3CODE_CLERK_CLI_OAUTH_CLIENT_ID",
+];
+
+fn validate_connect_environment(values: &BTreeMap<String, String>) -> Result<()> {
+    if CONNECT_KEYS
+        .iter()
+        .any(|key| values.get(*key).is_none_or(|v| v.trim().is_empty()))
+        || !values
+            .get(CONNECT_KEYS[0])
+            .is_some_and(|v| v.starts_with("https://"))
+        || !values
+            .get(CONNECT_KEYS[1])
+            .is_some_and(|v| v.starts_with("pk_"))
+    {
+        return Err("Full builds require all three T3 Connect public settings; set them in the environment or ~/.t3/fork-connect-public.json".into());
+    }
+    Ok(())
+}
+
+fn connect_build_environment() -> Result<BTreeMap<String, String>> {
+    let path = home()?.join(".t3/fork-connect-public.json");
+    let stored: BTreeMap<String, String> = if path.exists() {
+        serde_json::from_slice(&fs::read(path)?)?
+    } else {
+        BTreeMap::new()
+    };
+    let values = CONNECT_KEYS
+        .into_iter()
+        .map(|key| {
+            (
+                key.to_owned(),
+                env::var(key)
+                    .ok()
+                    .filter(|v| !v.trim().is_empty())
+                    .or_else(|| stored.get(key).cloned())
+                    .unwrap_or_default(),
+            )
+        })
+        .collect();
+    validate_connect_environment(&values)?;
+    Ok(values)
+}
+
+fn build_with_connect(args: &[&str], values: &BTreeMap<String, String>) -> Result<()> {
+    let status = Command::new("node").args(args).envs(values).status()?;
+    if !status.success() {
+        return Err(format!("Connect-enabled build failed: {status}").into());
+    }
+    Ok(())
+}
+
 fn run(program: &str, args: &[&str]) -> Result<()> {
     let status = Command::new(program).args(args).status()?;
     if !status.success() {
@@ -369,7 +423,7 @@ fn prepare_helpers(ver: &str) -> Result<String> {
     }
     Ok(helper)
 }
-fn distribute(ver: &str, builds: &Path) -> Result<()> {
+fn distribute(ver: &str, builds: &Path, stage_only: bool) -> Result<()> {
     let helper = prepare_helpers(ver)?;
     let transport = "ssh -o ConnectTimeout=8 -o ServerAliveInterval=10 -o ServerAliveCountMax=3";
     for platform in ["linux-x64", "darwin-arm64"] {
@@ -438,13 +492,27 @@ fn distribute(ver: &str, builds: &Path) -> Result<()> {
         )?;
     }
     stage(ver, &builds.join("fleet-darwin-arm64.tar"))?;
+    if stage_only {
+        println!("Fleet {ver} staged on M5, M3 and J; no running server or desktop was changed.");
+        return Ok(());
+    }
+    activate_fleet(ver, builds, &helper)
+}
+
+fn activate_fleet(ver: &str, builds: &Path, helper: &str) -> Result<()> {
+    idle()?;
+    if fs::read_to_string(runtime(ver)?.join(".install-complete"))?.trim() != ver {
+        return Err("Local staged runtime is incomplete".into());
+    }
+    let app = builds.join("desktop/T3 Code (Beta).app");
+    run("codesign", &["--verify", "--deep", "--strict", s(&app)])?;
     for host in ["m3", "j"] {
-        remote(host, &helper, &["host-idle"])?;
+        remote(host, helper, &["host-idle"])?;
     }
     let saved = backup(ver)?;
     for host in ["m3", "j"] {
-        remote(host, &helper, &["host-activate", "--version", ver])?;
-        remote(host, &helper, &["host-verify", "--version", ver])?;
+        remote(host, helper, &["host-activate", "--version", ver])?;
+        remote(host, helper, &["host-verify", "--version", ver])?;
         let runner = output(
             "node",
             &[
@@ -509,8 +577,9 @@ impl Drop for RestoreFile {
         }
     }
 }
-fn fleet(ver: &str, upstream: &str) -> Result<()> {
+fn fleet(ver: &str, upstream: &str, stage_only: bool) -> Result<()> {
     runtime(ver)?;
+    let connect = connect_build_environment()?;
     env::set_current_dir(root())?;
     if !output(
         "git",
@@ -542,7 +611,9 @@ fn fleet(ver: &str, upstream: &str) -> Result<()> {
     if base["dependencies"] != document["dependencies"] {
         return Err("Server dependencies differ from upstream runtime".into());
     }
-    idle()?;
+    if !stage_only {
+        idle()?;
+    }
     for host in ["m3", "j"] {
         ssh(host, "true")?;
     }
@@ -584,8 +655,7 @@ fn fleet(ver: &str, upstream: &str) -> Result<()> {
             return Err(format!("Upstream checksum mismatch: {name}").into());
         }
     }
-    run(
-        "node",
+    build_with_connect(
         &[
             "scripts/build-desktop-artifact.ts",
             "--platform",
@@ -599,6 +669,7 @@ fn fleet(ver: &str, upstream: &str) -> Result<()> {
             "--output-dir",
             s(&builds),
         ],
+        &connect,
     )?;
     run(
         "ditto",
@@ -632,14 +703,14 @@ fn fleet(ver: &str, upstream: &str) -> Result<()> {
             format!("{}\n", serde_json::to_string_pretty(&document)?),
         )?;
         for platform in ["darwin-arm64", "linux-x64"] {
-            run(
-                "node",
+            build_with_connect(
                 &[
                     "apps/server/scripts/cli.ts",
                     "build-exe",
                     "--target",
                     platform,
                 ],
+                &connect,
             )?;
             fs::copy(
                 root().join(format!("apps/server/dist-exe/t3-{platform}")),
@@ -688,7 +759,7 @@ fn fleet(ver: &str, upstream: &str) -> Result<()> {
             ],
         )?;
     }
-    distribute(ver, &builds)
+    distribute(ver, &builds, stage_only)
 }
 
 fn ui(args: &BTreeMap<String, String>) -> Result<()> {
@@ -830,7 +901,16 @@ fn main() {
         };
         match action.as_str() {
             "ui" => ui(&flags),
-            "fleet" => fleet(get("version")?, get("upstream-tag")?),
+            "fleet" => fleet(get("version")?, get("upstream-tag")?, false),
+            "fleet-stage" => fleet(get("version")?, get("upstream-tag")?, true),
+            "fleet-activate" => {
+                let ver = get("version")?;
+                let builds = home()?.join(".t3/builds").join(ver);
+                runtime(ver)?;
+                idle()?;
+                let helper = prepare_helpers(ver)?;
+                activate_fleet(ver, &builds, &helper)
+            }
             "host-stage" => stage(get("version")?, Path::new(get("archive")?)),
             "host-idle" => idle(),
             "host-activate" => activate(get("version")?),
@@ -842,7 +922,7 @@ fn main() {
             }
             "help" | "--help" => {
                 println!(
-                    "fork-deploy ui [--app PATH] [--base-dir PATH] [--built-client PATH]\nfork-deploy fleet --version VERSION --upstream-tag TAG\nFull fleet updates require idle hosts; UI updates never restart servers."
+                    "fork-deploy ui [--app PATH] [--base-dir PATH] [--built-client PATH]\nfork-deploy fleet --version VERSION --upstream-tag TAG\nfork-deploy fleet-stage --version VERSION --upstream-tag TAG\nfork-deploy fleet-activate --version VERSION\nFull fleet activation requires idle hosts; fleet-stage never activates; UI updates never restart servers."
                 );
                 Ok(())
             }
@@ -858,6 +938,25 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn connect_build_refuses_missing_public_configuration() {
+        let complete = BTreeMap::from([
+            (
+                CONNECT_KEYS[0].to_owned(),
+                "https://relay.example.com".to_owned(),
+            ),
+            (CONNECT_KEYS[1].to_owned(), "pk_test_public".to_owned()),
+            (CONNECT_KEYS[2].to_owned(), "public-cli-client".to_owned()),
+        ]);
+        assert!(validate_connect_environment(&complete).is_ok());
+        for key in CONNECT_KEYS {
+            let mut missing = complete.clone();
+            missing.remove(key);
+            assert!(validate_connect_environment(&missing).is_err());
+            missing.insert(key.to_owned(), " ".to_owned());
+            assert!(validate_connect_environment(&missing).is_err());
+        }
+    }
     fn temporary(name: &str) -> PathBuf {
         let path = env::temp_dir().join(format!("t3-rust-deploy-{}-{name}", std::process::id()));
         fs::create_dir(&path).unwrap();

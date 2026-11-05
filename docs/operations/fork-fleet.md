@@ -26,6 +26,18 @@ Apple signing identity, stages complete runtimes, and writes the SSH installatio
 marker only after each binary reports the expected version. Remote servers switch
 before the desktop, and running server versions must match before a completion
 receipt is written under `~/.t3/builds/<version>/fleet-complete.json`.
+
+Full builds require `T3CODE_RELAY_URL`, `T3CODE_CLERK_PUBLISHABLE_KEY` and
+`T3CODE_CLERK_CLI_OAUTH_CLIENT_ID`. The helper reads these from the environment,
+falling back to `~/.t3/fork-connect-public.json` with the same three keys.
+That file contains public build configuration, not login credentials. Missing
+values fail before building: a signed app without them can run locally while
+silently leaving every phone unable to connect after a restart.
+
+To prepare a repair while agents are working, use `fleet-stage` with the same
+version/upstream flags. It builds and stages all three hosts without activation.
+When all hosts are idle, run `scripts/fork-deploy fleet-activate --version VERSION`
+from a terminal outside T3. This activates the staged fleet and restarts the app.
 Archive transfers retain partial data for resumption; SSH keepalive checks stop
 unresponsive connections instead of leaving a transfer hanging indefinitely.
 M5 uploads both runtime packages to J. M3 pulls its Mac package and the staging
