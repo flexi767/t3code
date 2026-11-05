@@ -8,6 +8,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthSourceControlWriteScope,
   type ScopedThreadRef,
+  type EnvironmentId,
 } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -32,29 +33,42 @@ import { Button } from "./ui/button";
 import { Label } from "./ui/label";
 import { toastManager } from "./ui/toast";
 
-const useRequest = create<{ ref: ScopedThreadRef | null; session: number }>(() => ({
+const useRequest = create<{
+  ref: ScopedThreadRef | null;
+  session: number;
+  destinationEnvironmentId: EnvironmentId | null;
+}>(() => ({
   ref: null,
   session: 0,
+  destinationEnvironmentId: null,
 }));
-export function openMoveThreadDialog(ref: ScopedThreadRef) {
-  useRequest.setState((state) => ({ ref, session: state.session + 1 }));
+export function openMoveThreadDialog(
+  ref: ScopedThreadRef,
+  destinationEnvironmentId: EnvironmentId | null = null,
+) {
+  useRequest.setState((state) => ({ ref, destinationEnvironmentId, session: state.session + 1 }));
 }
 export function MoveThreadDialogHost() {
   const ref = useRequest((state) => state.ref);
   const session = useRequest((state) => state.session);
-  return ref ? <MoveThreadDialog key={session} threadRef={ref} /> : null;
+  const destinationEnvironmentId = useRequest((state) => state.destinationEnvironmentId);
+  return ref ? (
+    <MoveThreadDialog
+      key={session}
+      threadRef={ref}
+      destinationEnvironmentId={destinationEnvironmentId}
+    />
+  ) : null;
 }
 
-function MoveThreadDialog({ threadRef }: { threadRef: ScopedThreadRef }) {
-  const router = useRouter();
-  const thread = useThreadShell(threadRef);
+export function useThreadMoveTargets(sourceEnvironmentId: EnvironmentId) {
   const projects = useProjects();
   const configs = useServerConfigs();
   const { environments } = useEnvironments();
-  const targets = projects.flatMap((project) => {
+  return projects.flatMap((project) => {
     const environment = environments.find((entry) => entry.environmentId === project.environmentId);
     if (
-      project.environmentId === threadRef.environmentId ||
+      project.environmentId === sourceEnvironmentId ||
       project.archivedAt != null ||
       environment?.connection.phase !== "connected" ||
       configs.get(project.environmentId)?.environment.capabilities.threadMove !== true ||
@@ -66,17 +80,36 @@ function MoveThreadDialog({ threadRef }: { threadRef: ScopedThreadRef }) {
     return [
       {
         project,
+        environment,
+        machine: configs.get(project.environmentId)?.environment.platform.machine ?? "server",
         label: `${environment.label} · ${project.title}`,
         key: `${project.environmentId}:${project.id}`,
       },
     ];
   });
+}
+
+function MoveThreadDialog({
+  threadRef,
+  destinationEnvironmentId,
+}: {
+  threadRef: ScopedThreadRef;
+  destinationEnvironmentId: EnvironmentId | null;
+}) {
+  const router = useRouter();
+  const thread = useThreadShell(threadRef);
+  const configs = useServerConfigs();
+  const targets = useThreadMoveTargets(threadRef.environmentId);
   const [destination, setDestination] = useState<string | null>(null);
   const [phase, setPhase] = useState<"preparing" | "copying" | "finishing" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [transferId] = useState(randomUUID);
   const move = useAtomCommand(orchestrationEnvironment.moveThread, { reportFailure: false });
-  const target = targets.find((entry) => entry.key === destination) ?? targets[0];
+  const target =
+    targets.find((entry) => entry.key === destination) ??
+    (destinationEnvironmentId === null
+      ? targets[0]
+      : targets.find((entry) => entry.project.environmentId === destinationEnvironmentId));
   const canMove =
     thread !== null &&
     thread.runtime?.activeRunId == null &&

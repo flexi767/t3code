@@ -1,5 +1,6 @@
 import { ThreadHoverCard, ThreadHoverCardPopup } from "../ThreadHoverCard";
-import { compactSessionModel, sessionMachineLabel } from "../../lib/sessionLabels";
+import { compactSessionModel } from "../../lib/sessionLabels";
+import { ThreadMachineTransfer } from "./ThreadMachineTransfer";
 import { SessionUsageBadge } from "./SessionUsageBadge";
 import { SessionWorkspaceBadge, SessionWorkspaceDetails } from "./SessionWorkspaceBadge";
 import { SessionContextMeter } from "./SessionContextMeter";
@@ -79,7 +80,6 @@ import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { cn } from "~/lib/utils";
 import { useClientSettings } from "~/hooks/useSettings";
 import { textDirection } from "~/textDirection";
-import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import {
   animateSidebarLayoutChanges,
   hasUnseenCompletion,
@@ -295,15 +295,13 @@ function SidebarThreadTooltip({
           </div>
         ) : null}
         {environmentLabel ? (
-          <div className="flex min-w-0 items-center gap-2">
-            <EnvironmentMachineIcon
-              kind={environmentMachine}
-              className="size-3 shrink-0 stroke-muted-foreground"
-            />
-            <div className="min-w-0 truncate text-foreground/75">
-              {sessionMachineLabel(environmentLabel)}
-            </div>
-          </div>
+          <ThreadMachineTransfer
+            threadRef={threadRef}
+            label={environmentLabel}
+            kind={environmentMachine}
+            working={thread.runtime?.activeRunId != null}
+            detail
+          />
         ) : null}
         {branchMismatch ? (
           <div className="flex min-w-0 items-start gap-2 text-warning">
@@ -1161,10 +1159,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   ) : null;
 
   const remoteMachineIcon = (
-    <span className="inline-flex shrink-0 items-center">
-      <EnvironmentMachineIcon aria-hidden kind={props.environmentMachine} className="size-3.5" />
-      <span>{sessionMachineLabel(props.environmentLabel)}</span>
-    </span>
+    <ThreadMachineTransfer
+      threadRef={threadRef}
+      label={props.environmentLabel}
+      kind={props.environmentMachine}
+      working={thread.runtime?.activeRunId != null}
+    />
   );
   const diff = latestRunDiff(thread);
   // Only the trailing icons would remain, so the row moves them to the title line instead.
