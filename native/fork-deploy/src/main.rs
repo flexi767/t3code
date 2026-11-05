@@ -444,6 +444,7 @@ fn distribute(ver: &str, builds: &Path, stage_only: bool) -> Result<()> {
             "rsync",
             &[
                 "-azc",
+                "--whole-file",
                 "--partial",
                 "--inplace",
                 "-e",
@@ -472,7 +473,7 @@ fn distribute(ver: &str, builds: &Path, stage_only: bool) -> Result<()> {
             ssh(
                 host,
                 &format!(
-                    "rsync -azc --partial --inplace -e {} {} /tmp/",
+                    "rsync -azc --whole-file --partial --inplace -e {} {} /tmp/",
                     quote(transport),
                     quote(&format!("j:{destination}"))
                 ),
