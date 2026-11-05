@@ -16,6 +16,7 @@ import {
   CheckpointId,
   CheckpointRef,
   CommandId,
+  GitCommandError,
   EnvironmentId,
   ContextTransferId,
   EventId,
@@ -2241,6 +2242,7 @@ it.effect(
       let projectRoot = "";
       let crashAfterCheckout = false;
       let preparedPath = "";
+      let rejectPush = false;
       const runGit = (cwd: string, args: ReadonlyArray<string>) =>
         NodeChildProcess.execFileSync(
           "git",
@@ -2253,6 +2255,35 @@ it.effect(
           EventStore.layer,
           layerServerConfig,
           Layer.mock(GitVcsDriver.GitVcsDriver)({
+            commit: (cwd, subject) =>
+              Effect.sync(() => {
+                runGit(cwd, ["add", "--all"]);
+                runGit(cwd, [
+                  "-c",
+                  "user.name=T3 Test",
+                  "-c",
+                  "user.email=t3@example.test",
+                  "commit",
+                  "-m",
+                  subject,
+                ]);
+                return { commitSha: runGit(cwd, ["rev-parse", "HEAD"]).trim() };
+              }),
+            pushCurrentBranch: (cwd) =>
+              rejectPush
+                ? Effect.fail(
+                    new GitCommandError({
+                      operation: "test.push",
+                      command: "git push",
+                      cwd,
+                      detail: "Rejected push",
+                    }),
+                  )
+                : Effect.sync(() => {
+                    const branch = runGit(cwd, ["branch", "--show-current"]).trim();
+                    runGit(cwd, ["push", "origin", `HEAD:refs/heads/${branch}`]);
+                    return { status: "pushed" as const, branch };
+                  }),
             resolveCommit: ({ cwd, revision }) =>
               Effect.sync(() => ({
                 commitSha: runGit(cwd, ["rev-parse", "--verify", revision]).trim(),
@@ -2336,7 +2367,7 @@ it.effect(
         "-m",
         "Move fixture",
       ]);
-      const sourceCommit = runGit(projectRoot, ["rev-parse", "HEAD"]).trim();
+      let sourceCommit = runGit(projectRoot, ["rev-parse", "HEAD"]).trim();
       const sourceEnvironment = EnvironmentId.make("source-machine");
       const targetEnvironment = EnvironmentId.make("destination-machine");
       const makeMoves = (environmentId: EnvironmentId) =>
@@ -2694,10 +2725,36 @@ it.effect(
           ],
         });
       }
+      const remote = NodePath.join(config.worktreesDir, "remote.git");
+      runGit(projectRoot, ["init", "--bare", remote]);
+      runGit(projectRoot, ["remote", "add", "origin", remote]);
+      yield* fs.writeFileString(NodePath.join(projectRoot, "move-work.txt"), "work to carry");
+      rejectPush = true;
+      const preparationFailure = yield* source
+        .export({
+          threadId: sourceId,
+          transferId: "f1616321-3e1c-41fb-8357-d1d3dc4eae42",
+          prepareRepository: true,
+        })
+        .pipe(Effect.flip);
+      assert.include(preparationFailure.message, "Could not push");
+      assert.isNull((yield* orchestrator.getThreadProjection(sourceId)).thread.archivedAt);
+      const preparedCommit = runGit(projectRoot, ["rev-parse", "HEAD"]).trim();
+      assert.notEqual(preparedCommit, sourceCommit);
+      assert.equal(runGit(projectRoot, ["status", "--porcelain"]).trim(), "");
+      rejectPush = false;
       let bundle = yield* source.export({
         threadId: sourceId,
         transferId: "f1616321-3e1c-41fb-8357-d1d3dc4eae42",
+        prepareRepository: true,
       });
+      sourceCommit = preparedCommit;
+      assert.equal(runGit(projectRoot, ["rev-parse", "HEAD"]).trim(), preparedCommit);
+      assert.equal(runGit(remote, ["rev-parse", "refs/heads/main"]).trim(), preparedCommit);
+      assert.equal(
+        bundle.projections.find((entry) => entry.projection.thread.id === sourceId)!.commitSha,
+        preparedCommit,
+      );
       assert.equal(bundle.assets.length, 3);
       assert.isFalse(
         bundle.projections.some((entry) => entry.projection.thread.id === deletedAppId),

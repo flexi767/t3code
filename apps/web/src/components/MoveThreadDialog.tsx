@@ -81,9 +81,13 @@ function MoveThreadDialog({ threadRef }: { threadRef: ScopedThreadRef }) {
     thread !== null &&
     thread.runtime?.activeRunId == null &&
     configs.get(threadRef.environmentId)?.environment.capabilities.threadMove === true &&
-    [AuthOrchestrationReadScope, AuthOrchestrationOperateScope, AuthFilesystemReadScope].every(
-      (scope) => readEnvironmentScope(threadRef.environmentId, scope),
-    );
+    [
+      AuthOrchestrationReadScope,
+      AuthOrchestrationOperateScope,
+      AuthFilesystemReadScope,
+      AuthFilesystemWriteScope,
+      AuthSourceControlWriteScope,
+    ].every((scope) => readEnvironmentScope(threadRef.environmentId, scope));
   const close = () => {
     if (phase === null) useRequest.setState({ ref: null });
   };
@@ -105,7 +109,7 @@ function MoveThreadDialog({ threadRef }: { threadRef: ScopedThreadRef }) {
       setError(
         cause instanceof Error
           ? cause.message
-          : "Move failed. The source is unchanged; retry to reconcile any saved destination copy.",
+          : "Move failed. The source is kept; any preparation commit remains; retry to reconcile any saved destination copy.",
       );
       return;
     }
@@ -162,8 +166,9 @@ function MoveThreadDialog({ threadRef }: { threadRef: ScopedThreadRef }) {
               </Select>
             </div>
             <p className="text-muted-foreground text-xs">
-              Moves saved history, attachments and subthreads into a matching checkout. Commit and
-              push working changes first. The source stays recoverable in Archive.
+              Moves saved history, attachments and subthreads into a matching checkout. Checkout
+              changes are committed and pushed automatically. The source stays recoverable in
+              Archive.
             </p>
             {!canMove ? (
               <p className="text-muted-foreground text-xs">
@@ -173,7 +178,7 @@ function MoveThreadDialog({ threadRef }: { threadRef: ScopedThreadRef }) {
             {phase !== null ? (
               <p role="status" className="text-muted-foreground text-xs">
                 {phase === "preparing"
-                  ? "Preparing history…"
+                  ? "Committing, pushing and preparing history…"
                   : phase === "copying"
                     ? "Copying to destination…"
                     : "Confirming move…"}

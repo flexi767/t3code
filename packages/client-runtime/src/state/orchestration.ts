@@ -67,7 +67,11 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
           pendingMoves.get(key) ??
           (yield* registry.run(
             input.sourceEnvironmentId,
-            exportThreadMove({ threadId: input.threadId, transferId: input.transferId }),
+            exportThreadMove({
+              threadId: input.threadId,
+              transferId: input.transferId,
+              prepareRepository: true,
+            }),
           ));
         pendingMoves.set(key, bundle);
         while (pendingMoves.size > 2) pendingMoves.delete(pendingMoves.keys().next().value!);

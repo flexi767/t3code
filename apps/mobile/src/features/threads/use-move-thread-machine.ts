@@ -47,9 +47,13 @@ export function useMoveThreadMachine(thread: EnvironmentThreadShell) {
   });
   const supported =
     source?.serverConfig?.environment.capabilities.threadMove === true &&
-    [AuthOrchestrationReadScope, AuthOrchestrationOperateScope, AuthFilesystemReadScope].every(
-      (scope) => readEnvironmentScope(thread.environmentId, scope),
-    );
+    [
+      AuthOrchestrationReadScope,
+      AuthOrchestrationOperateScope,
+      AuthFilesystemReadScope,
+      AuthFilesystemWriteScope,
+      AuthSourceControlWriteScope,
+    ].every((scope) => readEnvironmentScope(thread.environmentId, scope));
   const items: MenuAction[] = supported
     ? [
         {
@@ -85,7 +89,7 @@ export function useMoveThreadMachine(thread: EnvironmentThreadShell) {
           message:
             cause instanceof Error
               ? cause.message
-              : "The source is unchanged. Retry to reconcile any saved destination copy.",
+              : "The source is kept; any preparation commit remains. Retry to reconcile any saved destination copy.",
           confirmText: "Retry",
           onConfirm: () => {
             void perform();
@@ -110,7 +114,7 @@ export function useMoveThreadMachine(thread: EnvironmentThreadShell) {
     Dialog.confirm({
       title: `Move to ${target.label}?`,
       message:
-        "Move saved history, attachments and subthreads into a matching checkout. Commit and push working changes first. The original stays recoverable in Archive.",
+        "Move saved history, attachments and subthreads into a matching checkout. Checkout changes are committed and pushed automatically. The original stays recoverable in Archive.",
       confirmText: "Move thread",
       onConfirm: () => {
         void perform();

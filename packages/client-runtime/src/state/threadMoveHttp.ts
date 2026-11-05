@@ -31,6 +31,7 @@ const context = Effect.gen(function* () {
 export const exportThreadMove = Effect.fn("threadMove.export")(function* (payload: {
   readonly threadId: ThreadId;
   readonly transferId: string;
+  readonly prepareRepository?: boolean;
 }) {
   return yield* executeAuthenticatedEnvironmentHttpRequest({
     ...(yield* context),

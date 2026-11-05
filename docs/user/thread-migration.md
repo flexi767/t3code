@@ -9,8 +9,10 @@ omitted. Fork ancestor snapshots are retained in the destination's Archive
 so inherited history can still be read. The desktop command palette and mobile thread menu offer
 the same action when both servers support it.
 
-Finish the thread and its subagents first. Commit and push workspace changes: the destination
-gets a new worktree at the saved commit, not a copy of uncommitted files. Install dependencies
+Finish the thread and its subagents first. Moving automatically commits checkout changes and
+pushes the branch to `origin`, then creates a destination worktree at that commit. Git hooks run
+normally; conflicts, push failures, or another active thread sharing the checkout stop the move.
+A failed move keeps the source and any preparation commit, so retrying does not lose work. Install dependencies
 or run the project's setup script in that worktree before continuing.
 
 The move copies saved messages, activity, attachments, and local subthreads. The first new turn

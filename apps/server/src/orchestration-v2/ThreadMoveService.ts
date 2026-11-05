@@ -10,6 +10,7 @@ import {
   type ThreadMoveBundle,
   type ThreadMoveImportInput,
   type ThreadMoveReceipt,
+  ThreadMoveExportInput,
   type OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -49,7 +50,7 @@ import {
   type MoveCheckout,
 } from "./threadMove.ts";
 
-type ExportInput = { readonly threadId: ThreadId; readonly transferId: string };
+type ExportInput = typeof ThreadMoveExportInput.Type;
 
 export class ThreadMoveService extends Context.Service<
   ThreadMoveService,
@@ -213,6 +214,18 @@ const make = Effect.gen(function* () {
       }
     }
     const projections: ThreadMoveBundle["projections"][number][] = [];
+    for (const id of selected) {
+      const projection = yield* threads
+        .getThreadProjection(id)
+        .pipe(failed("Could not inspect source work."));
+      if (
+        id !== input.threadId &&
+        (projection.thread.deletedAt !== null || projection.thread.archivedAt !== null)
+      )
+        continue;
+      yield* attempt(() => assertMoveIdle(projection));
+    }
+    const prepared = new Set<string>();
     const seen = new Set<ThreadId>();
     const queue = [...selected];
     for (const id of queue) {
@@ -233,9 +246,48 @@ const make = Effect.gen(function* () {
       yield* attempt(() => assertMoveIdle(projection));
       const row = yield* project(projection.thread.projectId);
       const cwd = projection.thread.worktreePath ?? row.workspaceRoot;
-      const status = yield* git
+      let status = yield* git
         .localStatus({ cwd, includeCheckoutDetails: true })
         .pipe(failed("Could not inspect the source checkout."));
+      if (input.prepareRepository && status.isRepo && !prepared.has(cwd)) {
+        if (!status.refName)
+          return yield* new ThreadMoveError({
+            message: "Choose a branch before moving this checkout.",
+          });
+        const peers = yield* threads
+          .listProjectThreads({ includeSubagents: true })
+          .pipe(failed("Could not inspect other active threads."));
+        for (const peer of peers) {
+          if (peer.activeRunId === null || selected.has(peer.id)) continue;
+          const peerProject = yield* project(peer.projectId);
+          if (
+            NodePath.resolve(peer.worktreePath ?? peerProject.workspaceRoot) ===
+            NodePath.resolve(cwd)
+          )
+            return yield* new ThreadMoveError({
+              message: "Another thread is working in this checkout. Finish it before moving.",
+            });
+        }
+        if (status.hasWorkingTreeChanges)
+          yield* driver
+            .commit(cwd, "chore: save work before moving thread", "", { stage: {} })
+            .pipe(
+              failed(
+                "Could not commit checkout changes. Resolve Git conflicts or failing hooks, then retry the move.",
+              ),
+            );
+        yield* driver
+          .pushCurrentBranch(cwd, status.refName, { remoteName: "origin" })
+          .pipe(
+            failed(
+              "Could not push to origin. Any local commit is kept; check Git access or branch divergence, then retry.",
+            ),
+          );
+        status = yield* git
+          .localStatus({ cwd, includeCheckoutDetails: true })
+          .pipe(failed("Could not verify the prepared checkout."));
+        prepared.add(cwd);
+      }
       if (selected.has(id) && status.hasWorkingTreeChanges) {
         return yield* new ThreadMoveError({
           message:
