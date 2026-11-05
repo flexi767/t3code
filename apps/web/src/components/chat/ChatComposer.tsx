@@ -3230,6 +3230,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       <div className="relative">
         <ComposerSurface.Main
           ref={composerMainSurfaceRef}
+          onFocusInput={
+            projectSelectionRequired || isChoiceOnlyPendingQuestion || activePendingIsResponding
+              ? undefined
+              : isComposerCollapsedMobile
+                ? expandMobileComposerStable
+                : focusComposer
+          }
           data-inline-resting-controls="true"
           className={composerProviderState.composerFrameClassName}
         >

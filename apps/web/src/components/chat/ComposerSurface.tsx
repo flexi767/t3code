@@ -49,10 +49,31 @@ function Host({ className, ...props }: ComponentProps<"div">) {
   );
 }
 
-function Main({ className, ...props }: ComponentProps<"div">) {
+function Main({
+  className,
+  onFocusInput,
+  onPointerDown,
+  ...props
+}: ComponentProps<"div"> & {
+  onFocusInput?: (() => void) | undefined;
+}) {
   return (
     <div
       data-chat-composer-main-surface="true"
+      onPointerDown={(event) => {
+        onPointerDown?.(event);
+        if (!onFocusInput || event.defaultPrevented || event.button !== 0) return;
+        const target = event.target;
+        if (!(target instanceof Element) || !event.currentTarget.contains(target)) return;
+        if (
+          target.closest(
+            'button, a[href], input, select, textarea, label, [role="button"], [role="combobox"], [role="menuitem"], [role="slider"], [contenteditable], [tabindex]',
+          )
+        )
+          return;
+        event.preventDefault();
+        onFocusInput();
+      }}
       className={cn(
         "group relative z-10 rounded-2xl p-px",
         outlineClasses,
