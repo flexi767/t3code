@@ -185,16 +185,34 @@ fn idle() -> Result<()> {
     let db = home()?.join(".t3/userdata/statev2.sqlite");
     idle_at(&db)
 }
+fn read_idle_count(mut read: impl FnMut() -> Result<String>) -> Result<String> {
+    for attempt in 0..10 {
+        match read() {
+            Ok(count) => return Ok(count),
+            Err(error) => {
+                if attempt == 9
+                    || !error
+                        .to_string()
+                        .contains("unable to open database file (14)")
+                {
+                    return Err(error);
+                }
+                thread::sleep(Duration::from_millis(200));
+            }
+        }
+    }
+    unreachable!()
+}
 fn idle_at(db: &Path) -> Result<()> {
     if db.exists() {
-        let count = output(
+        let count = read_idle_count(|| output(
             "sqlite3",
             &[
                 "-readonly",
                 s(db),
                 "SELECT count(*) FROM orchestration_v2_projection_runs WHERE status IN ('queued','preparing','starting','running','waiting')",
             ],
-        )?;
+        )).map_err(|error| format!("Cannot check active turns in {}: {error}", db.display()))?;
         if count != "0" {
             return Err(
                 format!("{count} active turns; finish before switching server versions").into(),
@@ -994,6 +1012,38 @@ mod tests {
         assert!(!target.join(".install-complete").exists());
         assert_eq!(fs::read_to_string(&old).unwrap(), "keep");
         fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn idle_query_retries_only_database_open_failures() {
+        let mut attempts = 0;
+        let result = read_idle_count(|| {
+            attempts += 1;
+            if attempts == 1 {
+                Err("sqlite3: Parse error in 3rd command line argument: unable to open database file (14)".into())
+            } else {
+                Ok("2".into())
+            }
+        });
+        assert_eq!(result.unwrap(), "2");
+        assert_eq!(attempts, 2);
+        let mut attempts = 0;
+        assert!(
+            read_idle_count(|| {
+                attempts += 1;
+                Err("no such table".into())
+            })
+            .is_err()
+        );
+        assert_eq!(attempts, 1);
+        let mut attempts = 0;
+        assert!(
+            read_idle_count(|| {
+                attempts += 1;
+                Err("unable to open database file (14)".into())
+            })
+            .is_err()
+        );
+        assert_eq!(attempts, 10);
     }
     #[test]
     fn idle_guard_reads_database_and_refuses_active_turns() {
