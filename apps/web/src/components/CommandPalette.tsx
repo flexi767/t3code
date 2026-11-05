@@ -1,4 +1,5 @@
 import { threadPullRequestLinkMode } from "@t3tools/client-runtime/thread-pull-request-compatibility";
+import { openMoveThreadDialog } from "./MoveThreadDialog";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 
 import {
@@ -54,6 +55,7 @@ import {
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,
+  ArrowUpRightIcon,
   BugIcon,
   ChartNoAxesColumnIcon,
   CheckIcon,
@@ -1228,6 +1230,19 @@ function OpenCommandPaletteDialog(props: {
   };
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
+  if (activeThread && activeThreadServerConfig?.environment.capabilities.threadMove === true) {
+    const ref = scopeThreadRef(activeThread.environmentId, activeThread.id);
+    actionItems.push({
+      kind: "action",
+      value: "action:move-thread-machine",
+      title: "Move thread to another machine",
+      searchTerms: ["move", "transfer", "machine", "environment"],
+      icon: <ArrowUpRightIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        openMoveThreadDialog(ref);
+      },
+    });
+  }
 
   if (projects.length > 0) {
     const activeProjectTitle =

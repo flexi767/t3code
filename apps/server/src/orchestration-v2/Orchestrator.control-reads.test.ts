@@ -642,10 +642,29 @@ it.effect(
         turnItemTypes: ["user_message"],
       });
       assert.isAbove(fresh.turnItems.at(-1)!.ordinal, 900);
+      const sink = yield* EventSink.EventSinkV2;
+      const exportedSequence = yield* sink.latestSequence({ threadId });
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("edit-during-move"),
+        threadId,
+        title: "New source work",
+      });
+      const staleMove = yield* orchestrator
+        .dispatch({
+          type: "thread.archive",
+          commandId: CommandId.make("archive-stale-move"),
+          threadId,
+          expectedMoveSequence: exportedSequence,
+        })
+        .pipe(Effect.flip);
+      assert.instanceOf(staleMove, Orchestrator.OrchestratorDispatchError);
+      assert.isNull((yield* projections.getThread(threadId)).archivedAt);
       yield* orchestrator.dispatch({
         type: "thread.archive",
         commandId: CommandId.make("archive-with-old-history"),
         threadId,
+        expectedMoveSequence: yield* sink.latestSequence({ threadId }),
       });
       yield* orchestrator.dispatch({
         type: "thread.delete",

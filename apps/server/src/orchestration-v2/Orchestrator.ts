@@ -3208,6 +3208,23 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
     }
+    if (command.type === "thread.archive" && command.expectedMoveSequence !== undefined) {
+      const sequence = yield* eventSink
+        .latestSequence({ threadId: command.threadId })
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        );
+      if (sequence !== command.expectedMoveSequence) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause:
+            "The source thread changed during the move. Its destination copy is saved; the source has been kept active.",
+        });
+      }
+    }
     if (
       command.type === "thread.metadata.update" &&
       command.expectedWorktreePath !== undefined &&
@@ -6317,8 +6334,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const runId = idAllocator.derive.run({ threadId: command.threadId, ordinal });
     const latestCompletedRun = projection.runs.findLast((run) => run.status === "completed");
     const latestHandoffRun = projection.runs.findLast(isHandoffSourceRun);
-    const legacyImportItems =
-      projection.thread.historyOrigin === "v1_import"
+    const movedContextRequired =
+      projection.thread.pendingContextImport === true &&
+      activeProviderThread?.nativeThreadRef == null;
+    const legacyImportItems = movedContextRequired
+      ? [
+          ...(yield* readInheritedItems(projection.thread)),
+          ...(yield* readHandoffItems(command.threadId)),
+        ]
+      : projection.thread.historyOrigin === "v1_import"
         ? yield* readHandoffItems(command.threadId, [null])
         : [];
     const isProviderSwitch =
@@ -6394,22 +6418,24 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           driver: adapter.driver,
           nativeThreadId: `pending:${runId}`,
         });
-      const legacyImportHandoff = shouldPrepareLegacyImportHandoff({
-        historyOrigin: projection.thread.historyOrigin,
-        hasCompletedRun: latestCompletedRun !== undefined,
-        legacyImportItemCount: legacyImportItems.length,
-      })
-        ? yield* contextHandoffService
-            .prepareLegacyImport({
-              threadId: command.threadId,
-              targetRunId: runId,
-              toProviderThreadId: providerThreadId,
-              toProviderInstanceId: modelSelection.instanceId,
-              items: legacyImportItems,
-              createdAt: now,
-            })
-            .pipe(mapDispatchError(command))
-        : null;
+      const legacyImportHandoff =
+        movedContextRequired ||
+        shouldPrepareLegacyImportHandoff({
+          historyOrigin: projection.thread.historyOrigin,
+          hasCompletedRun: latestCompletedRun !== undefined,
+          legacyImportItemCount: legacyImportItems.length,
+        })
+          ? yield* contextHandoffService
+              .prepareLegacyImport({
+                threadId: command.threadId,
+                targetRunId: runId,
+                toProviderThreadId: providerThreadId,
+                toProviderInstanceId: modelSelection.instanceId,
+                items: legacyImportItems,
+                createdAt: now,
+              })
+              .pipe(mapDispatchError(command))
+          : null;
       const providerThread: OrchestrationV2ProviderThread =
         activeProviderThread === undefined
           ? {

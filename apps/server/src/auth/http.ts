@@ -22,12 +22,14 @@ import type { AuthEnvironmentScope, DpopFailureReason } from "@t3tools/contracts
 import { parseOAuthScope } from "@t3tools/shared/oauthScope";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import * as Clock from "effect/Clock";
+import * as ByteSize from "effect/ByteSize";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Layer from "effect/Layer";
 import * as Cookies from "effect/http/Cookies";
 import * as HttpEffect from "effect/http/HttpEffect";
+import * as HttpIncomingMessage from "effect/http/HttpIncomingMessage";
 import { HttpServerRequest, HttpServerResponse } from "effect/http";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 
@@ -246,7 +248,12 @@ export const layerAuthenticatedAuth = Layer.effect(
           ),
         );
         const endTime = yield* Clock.currentTimeNanos;
-        const handler = httpEffect.pipe(
+        const boundedEffect = request.url.startsWith("/api/orchestration/thread-move/")
+          ? httpEffect.pipe(
+              Effect.provideService(HttpIncomingMessage.MaxBodySize, ByteSize.mebibytes(64)),
+            )
+          : httpEffect;
+        const handler = boundedEffect.pipe(
           Effect.provideService(EnvironmentAuthenticatedPrincipal, {
             ...session,
             scopes: new Set(session.scopes),

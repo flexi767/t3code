@@ -1,4 +1,5 @@
 import * as Dialog from "../../components/ui/Dialog";
+import { useMoveThreadMachine } from "./use-move-thread-machine";
 import type { ThreadRowProviderInstance } from "./thread-provider-instance";
 import {
   THREAD_LIST_V2_MONO_FONT as MONO_FONT,
@@ -706,6 +707,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     onSetThreadAutoSettle,
     onMoveThread,
   } = props;
+  const { items: machineMoveItems, handle: handleMachineMove } = useMoveThreadMachine(thread);
   const snoozedRow = props.snoozed === true;
   const pinnedRow = props.pinned === true;
   const dormant = useSwipeRowDormant(props.activationKey);
@@ -832,6 +834,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const arrangementMenuItems = useMemo<MenuAction[]>(
     () => [
+      ...machineMoveItems,
       ...(props.reorderSupported === true
         ? [
             { id: "arrange", title: "Arrange threads…", image: "line.3.horizontal" },
@@ -858,6 +861,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         : []),
     ],
     [
+      machineMoveItems,
       props.canMoveDown,
       props.canMoveUp,
       props.reorderSupported,
@@ -955,12 +959,13 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const snoozedMenuActions = useMemo<MenuAction[]>(
     () => [
       SNOOZED_MENU_ACTIONS[0]!,
+      ...machineMoveItems,
       ...titleMenuItems,
       ...autoSettleMenuItems,
       LEGACY_MENU_ACTIONS[0]!,
       SNOOZED_MENU_ACTIONS[1]!,
     ],
-    [autoSettleMenuItems, titleMenuItems],
+    [autoSettleMenuItems, titleMenuItems, machineMoveItems],
   );
   const legacyMenuActions = useMemo<MenuAction[]>(
     () => [
@@ -973,6 +978,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
+      if (handleMachineMove(nativeEvent.event)) return;
       if (nativeEvent.event === "new-thread-on-branch") onNewThreadOnBranch(thread);
       if (nativeEvent.event === "settle") handleSettle();
       if (nativeEvent.event === "unsettle") handleUnsettle();
@@ -1021,6 +1027,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       }
     },
     [
+      handleMachineMove,
       onNewThreadOnBranch,
       thread,
       handleArchive,

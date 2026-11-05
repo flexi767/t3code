@@ -1,9 +1,13 @@
 import {
   ORCHESTRATION_V2_WS_METHODS,
   type ThreadId,
+  type EnvironmentId,
+  type ProjectId,
+  type ThreadMoveBundle,
   type OrchestrationGetTurnDiffResult,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -17,14 +21,16 @@ import {
   createEnvironmentRpcQueryAtomFamily,
   createEnvironmentRpcSubscriptionAtomFamily,
   createEnvironmentCommand,
+  createRuntimeCommand,
   type QueryAnswerHandler,
 } from "./runtime.ts";
-import type { EnvironmentRegistry } from "../connection/registry.ts";
+import { EnvironmentRegistry } from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import * as ManagedRelayDpopSigner from "../relay/managedRelay.ts";
 import { EnvironmentRpcUnavailableError } from "../rpc/client.ts";
 import { fetchEnvironmentThreadTranscript } from "./threadTranscriptHttp.ts";
+import { exportThreadMove, importThreadMove, finishThreadMove } from "./threadMoveHttp.ts";
 
 export function createOrchestrationEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | HttpClient.HttpClient | R, E>,
@@ -36,11 +42,49 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
     >;
   } = {},
 ) {
+  // Keep a bounded snapshot for retrying a lost import response without re-exporting changed history.
+  const pendingMoves = new Map<string, ThreadMoveBundle>();
   const onCheckpointDiffAnswer =
     options.onCheckpointDiffAnswer === undefined
       ? {}
       : { onAnswer: options.onCheckpointDiffAnswer };
   return {
+    moveThread: createRuntimeCommand(runtime, {
+      label: "Move thread to another machine",
+      concurrency: { mode: "serial", key: () => "thread-move" },
+      execute: Effect.fn("orchestration.moveThread")(function* (input: {
+        readonly sourceEnvironmentId: EnvironmentId;
+        readonly threadId: ThreadId;
+        readonly destinationEnvironmentId: EnvironmentId;
+        readonly destinationProjectId: ProjectId;
+        readonly transferId: string;
+        readonly onProgress?: (phase: "preparing" | "copying" | "finishing") => void;
+      }) {
+        const registry = yield* EnvironmentRegistry;
+        input.onProgress?.("preparing");
+        const key = `${input.sourceEnvironmentId}:${input.threadId}:${input.destinationEnvironmentId}:${input.destinationProjectId}:${input.transferId}`;
+        const bundle =
+          pendingMoves.get(key) ??
+          (yield* registry.run(
+            input.sourceEnvironmentId,
+            exportThreadMove({ threadId: input.threadId, transferId: input.transferId }),
+          ));
+        pendingMoves.set(key, bundle);
+        while (pendingMoves.size > 2) pendingMoves.delete(pendingMoves.keys().next().value!);
+        input.onProgress?.("copying");
+        const receipt = yield* registry.run(
+          input.destinationEnvironmentId,
+          importThreadMove({ projectId: input.destinationProjectId, bundle }),
+        );
+        input.onProgress?.("finishing");
+        // A lost source connection cannot undo a successfully committed destination copy.
+        const finished = yield* registry
+          .run(input.sourceEnvironmentId, finishThreadMove(receipt))
+          .pipe(Effect.exit);
+        pendingMoves.delete(key);
+        return { receipt, sourceArchived: Exit.isSuccess(finished) };
+      }),
+    }),
     threadTranscript: createEnvironmentCommand(runtime, {
       label: "environment-data:orchestration:thread-transcript",
       execute: Effect.fn("orchestration.execute")(function* (input: {

@@ -51,6 +51,7 @@ import * as ResourceCleanupService from "./ResourceCleanupService.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
+import * as ThreadMoveService from "./ThreadMoveService.ts";
 import * as ThreadLaunchService from "./ThreadLaunchService.ts";
 import * as ThreadForkService from "./ThreadForkService.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
@@ -368,6 +369,16 @@ export const layer = Layer.mergeAll(
 );
 
 export const layerProduction = Layer.mergeAll(
+  ThreadMoveService.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        layerThreadManagementProvided,
+        layerStores,
+        layerEventSink,
+        ThreadCommandExecutor.layer,
+      ),
+    ),
+  ),
   layer.pipe(Layer.provide(layerProjectService)),
   layerProjectService,
   layerManagedProjectFoldersProvided,

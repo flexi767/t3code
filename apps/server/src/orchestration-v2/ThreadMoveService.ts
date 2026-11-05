@@ -1,0 +1,464 @@
+// @effect-diagnostics nodeBuiltinImport:off - portable attachment files are copied atomically inside the configured attachment root.
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+import {
+  CommandId,
+  ThreadId,
+  ThreadMoveError,
+  type ProjectId,
+  type ThreadMoveBundle,
+  type ThreadMoveImportInput,
+  type ThreadMoveReceipt,
+  type OrchestrationV2ThreadProjection,
+} from "@t3tools/contracts";
+import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import * as ServerConfig from "../config.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as GitWorkflow from "../git/GitWorkflowService.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import {
+  attachmentRelativePath,
+  createDeterministicAttachmentId,
+  resolveAttachmentPathById,
+  parseAttachmentUuid,
+  parseAttachmentFileExtension,
+} from "../attachmentStore.ts";
+import * as Threads from "./ThreadManagementService.ts";
+import * as Projects from "./ProjectStore.ts";
+import * as EventStore from "./EventStore.ts";
+import * as EventSink from "./EventSink.ts";
+import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import {
+  assertMoveIdle,
+  importedMoveProjections,
+  movedId,
+  moveDigest,
+  moveProjectionEvents,
+  validateMoveBundle,
+  THREAD_MOVE_MAX_BYTES,
+  type MoveCheckout,
+} from "./threadMove.ts";
+
+type ExportInput = { readonly threadId: ThreadId; readonly transferId: string };
+
+export class ThreadMoveService extends Context.Service<
+  ThreadMoveService,
+  {
+    readonly export: (input: ExportInput) => Effect.Effect<ThreadMoveBundle, ThreadMoveError>;
+    readonly receive: (
+      input: ThreadMoveImportInput,
+    ) => Effect.Effect<ThreadMoveReceipt, ThreadMoveError>;
+    readonly finish: (
+      input: ThreadMoveReceipt,
+    ) => Effect.Effect<ThreadMoveReceipt, ThreadMoveError>;
+  }
+>()("t3/orchestration-v2/ThreadMoveService") {}
+
+const isMoveError = Schema.is(ThreadMoveError);
+const failed = (message: string) =>
+  Effect.mapError((error: unknown) =>
+    isMoveError(error) ? error : new ThreadMoveError({ message }),
+  );
+const attempt = <A>(f: () => A) =>
+  Effect.try({
+    try: f,
+    catch: (error) =>
+      isMoveError(error)
+        ? error
+        : new ThreadMoveError({ message: "Could not read or write a transfer attachment." }),
+  });
+
+function safeAssetPath(root: string, relative: string): string {
+  if (!/^[a-z0-9_-]+(?:\.[a-z0-9_-]+){1,3}$/i.test(relative) || relative.length > 240) {
+    throw new ThreadMoveError({ message: "Invalid transfer attachment path." });
+  }
+  const path = NodePath.join(root, relative);
+  if (
+    NodeFS.existsSync(path) &&
+    (NodeFS.lstatSync(path).isSymbolicLink() || !NodeFS.statSync(path).isFile())
+  ) {
+    throw new ThreadMoveError({ message: "Transfer attachments must be regular files." });
+  }
+  return path;
+}
+
+function relatedThreadIds(projection: OrchestrationV2ThreadProjection): ReadonlyArray<ThreadId> {
+  return [
+    ...new Set(
+      [
+        projection.thread.lineage.parentThreadId,
+        projection.thread.forkedFrom?.type === "run" ? projection.thread.forkedFrom.threadId : null,
+        ...projection.contextTransfers.map((transfer) => transfer.sourceThreadId),
+      ].filter((id): id is ThreadId => id !== null && id !== projection.thread.id),
+    ),
+  ];
+}
+
+const make = Effect.gen(function* () {
+  const threads = yield* Threads.ThreadManagementService;
+  const projects = yield* Projects.ProjectStoreV2;
+  const store = yield* EventStore.EventStoreV2;
+  const sink = yield* EventSink.EventSinkV2;
+  const executor = yield* ThreadCommandExecutor.ThreadCommandExecutor;
+  const git = yield* GitWorkflow.GitWorkflowService;
+  const driver = yield* GitVcsDriver.GitVcsDriver;
+  const environmentId = yield* (yield* ServerEnvironment.ServerEnvironmentIdentity)
+    .getEnvironmentId;
+  const config = yield* ServerConfig.ServerConfig;
+
+  const project = (projectId: ProjectId) =>
+    projects.get(projectId).pipe(
+      failed("Could not read the project."),
+      Effect.flatMap((row) =>
+        Option.isSome(row) && row.value.deletedAt === null && row.value.archivedAt === null
+          ? Effect.succeed(row.value)
+          : Effect.fail(new ThreadMoveError({ message: "Choose an active destination project." })),
+      ),
+    );
+
+  const exportThread = Effect.fn("ThreadMove.export")(function* (input: ExportInput) {
+    const selected = new Set<ThreadId>([input.threadId]);
+    const selectedQueue = [input.threadId];
+    for (const id of selectedQueue) {
+      for (const child of yield* threads
+        .listAppOwnedChildThreadIds(id)
+        .pipe(failed("Could not read subthreads."))) {
+        if (!selected.has(child)) {
+          selected.add(child);
+          selectedQueue.push(child);
+        }
+      }
+    }
+    const projections: ThreadMoveBundle["projections"][number][] = [];
+    const seen = new Set<ThreadId>();
+    const queue = [...selected];
+    for (const id of queue) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      yield* threads.ensureLegacyTranscript(id).pipe(failed("Could not load saved history."));
+      const { projection, snapshotSequence } = yield* threads
+        .getThreadSnapshot(id)
+        .pipe(failed("Could not export the full thread."));
+      yield* attempt(() => assertMoveIdle(projection));
+      const row = yield* project(projection.thread.projectId);
+      const cwd = projection.thread.worktreePath ?? row.workspaceRoot;
+      const status = yield* git
+        .localStatus({ cwd, includeCheckoutDetails: true })
+        .pipe(failed("Could not inspect the source checkout."));
+      if (selected.has(id) && status.hasWorkingTreeChanges) {
+        return yield* new ThreadMoveError({
+          message:
+            "Commit the thread's working-tree changes before moving it. Working files are not copied between machines.",
+        });
+      }
+      const commitSha = status.isRepo
+        ? (yield* driver
+            .resolveCommit({ cwd, revision: "HEAD" })
+            .pipe(failed("Could not resolve the source commit."))).commitSha
+        : null;
+      projections.push({
+        projection,
+        sequence: snapshotSequence,
+        move: selected.has(id),
+        commitSha,
+      });
+      for (const reference of relatedThreadIds(projection))
+        if (!seen.has(reference)) queue.push(reference);
+    }
+    const assets = yield* attempt(() => {
+      const paths = new Set<string>();
+      for (const { projection } of projections) {
+        for (const message of projection.messages)
+          for (const attachment of message.attachments) {
+            const path = attachmentRelativePath(attachment);
+            if (path !== null) paths.add(path);
+          }
+        // Render and recording tools refer to saved assets outside message.attachments.
+        const visit = (value: unknown): void => {
+          if (typeof value === "string" && parseAttachmentUuid(value) !== null) {
+            const path = resolveAttachmentPathById({
+              attachmentsDir: config.attachmentsDir,
+              attachmentId: value,
+            });
+            if (path !== null) paths.add(NodePath.basename(path));
+          } else if (Array.isArray(value)) value.forEach(visit);
+          else if (value !== null && typeof value === "object") Object.values(value).forEach(visit);
+        };
+        projection.turnItems.forEach(visit);
+      }
+      let bytes = 0;
+      return [...paths].map((path) => {
+        const file = safeAssetPath(config.attachmentsDir, path);
+        if (!NodeFS.existsSync(file))
+          throw new ThreadMoveError({
+            message:
+              "A saved attachment is missing on the source machine. Restore it before moving this thread.",
+          });
+        bytes += NodeFS.statSync(file).size;
+        if (bytes > THREAD_MOVE_MAX_BYTES)
+          throw new ThreadMoveError({
+            message: "This thread's attachments exceed the 32 MB move limit.",
+          });
+        return { path, data: NodeFS.readFileSync(file).toString("base64") };
+      });
+    });
+    const bundle = {
+      version: 1 as const,
+      transferId: input.transferId,
+      sourceThreadId: input.threadId,
+      sourceEnvironmentId: environmentId,
+      projections,
+      assets,
+    };
+    yield* attempt(() => validateMoveBundle(bundle));
+    return bundle;
+  });
+
+  const receive = Effect.fn("ThreadMove.receive")(function* ({
+    projectId,
+    bundle,
+  }: ThreadMoveImportInput) {
+    yield* attempt(() => validateMoveBundle(bundle));
+    if (
+      bundle.sourceEnvironmentId === environmentId ||
+      !bundle.projections.some(
+        (entry) => entry.move && entry.projection.thread.id === bundle.sourceThreadId,
+      )
+    ) {
+      return yield* new ThreadMoveError({
+        message: "Choose another machine and a valid source thread.",
+      });
+    }
+    const destination = yield* project(projectId);
+    const digest = yield* attempt(() => moveDigest(bundle));
+    const targetId = ThreadId.make(movedId(bundle.transferId, bundle.sourceThreadId));
+    const receipt: ThreadMoveReceipt = {
+      transferId: bundle.transferId,
+      sourceEnvironmentId: bundle.sourceEnvironmentId,
+      sourceThreadId: bundle.sourceThreadId,
+      destinationEnvironmentId: environmentId,
+      destinationThreadId: targetId,
+      destinationProjectId: projectId,
+      digest,
+      sources: bundle.projections
+        .filter((entry) => entry.move)
+        .map((entry) => ({ threadId: entry.projection.thread.id, sequence: entry.sequence })),
+    };
+    return yield* executor.withLock(
+      targetId,
+      Effect.gen(function* () {
+        const previous = yield* threads
+          .getThreadShell(targetId)
+          .pipe(failed("Could not check a previous transfer."));
+        if (previous !== null) {
+          const creation = yield* store
+            .read({ threadId: targetId, eventType: "thread.created", limit: 1 })
+            .pipe(Stream.runCollect, failed("Could not verify the previous transfer."));
+          if (
+            previous.projectId !== projectId ||
+            !creation[0]?.event.id.startsWith(`thread-move:${bundle.transferId}:${digest}:`)
+          ) {
+            return yield* new ThreadMoveError({
+              message:
+                "This move ID was already used for a different snapshot or project. Start a new move.",
+            });
+          }
+          return receipt;
+        }
+        const checkouts = new Map<string, MoveCheckout>();
+        const created: { path: string; branch: string; commit: string }[] = [];
+        const committed = { value: false };
+        return yield* Effect.gen(function* () {
+          for (const entry of bundle.projections) {
+            yield* attempt(() => assertMoveIdle(entry.projection));
+            const enabled = yield* threads.isProviderInstanceEnabledForProject({
+              projectId,
+              instanceId: entry.projection.thread.providerInstanceId,
+            });
+            if (entry.move && !enabled)
+              return yield* new ThreadMoveError({
+                message: `Enable provider ${entry.projection.thread.providerInstanceId} in the destination project before moving.`,
+              });
+            if (!entry.move || entry.commitSha === null) {
+              checkouts.set(entry.projection.thread.id, {
+                path: destination.workspaceRoot,
+                branch: null,
+              });
+              continue;
+            }
+            if (!/^[a-f0-9]{40,64}$/i.test(entry.commitSha))
+              return yield* new ThreadMoveError({ message: "Invalid source commit." });
+            const available = yield* git
+              .hasCommit({ cwd: destination.workspaceRoot, refName: entry.commitSha })
+              .pipe(failed("Could not inspect the destination repository."));
+            if (!available)
+              yield* git
+                .fetchRemote({ cwd: destination.workspaceRoot, remoteName: "origin" })
+                .pipe(
+                  failed("Could not fetch the destination repository. Check its Git credentials."),
+                );
+            if (
+              !(yield* git
+                .hasCommit({ cwd: destination.workspaceRoot, refName: entry.commitSha })
+                .pipe(failed("Could not inspect the destination commit.")))
+            ) {
+              return yield* new ThreadMoveError({
+                message:
+                  "The source commit is not available on the destination. Push its branch first, then retry.",
+              });
+            }
+            const branch = `t3-move-${bundle.transferId.slice(0, 8)}-${movedId(bundle.transferId, entry.projection.thread.id).slice(0, 8)}`;
+            const checkout = yield* git
+              .createWorktree({
+                cwd: destination.workspaceRoot,
+                refName: entry.commitSha,
+                newRefName: branch,
+                path: null,
+              })
+              .pipe(failed("Could not prepare the destination worktree."));
+            created.push({ path: checkout.worktree.path, branch, commit: entry.commitSha });
+            checkouts.set(entry.projection.thread.id, {
+              path: checkout.worktree.path,
+              branch: checkout.worktree.refName,
+            });
+          }
+          const assetIds = new Map<string, string>();
+          yield* attempt(() => {
+            let bytes = 0;
+            for (const asset of bundle.assets) {
+              safeAssetPath(config.attachmentsDir, asset.path);
+              const separator = asset.path.indexOf(".");
+              const oldId = asset.path.slice(0, separator);
+              const baseId = createDeterministicAttachmentId(
+                targetId,
+                `${bundle.transferId}:${oldId}`,
+              );
+              if (baseId === null || parseAttachmentUuid(oldId) === null)
+                throw new ThreadMoveError({ message: "Invalid attachment identity." });
+              const extension = parseAttachmentFileExtension(oldId);
+              const id = extension === null ? baseId : `${baseId}-${extension}`;
+              const data = Buffer.from(asset.data, "base64");
+              if (data.toString("base64") !== asset.data)
+                throw new ThreadMoveError({ message: "Invalid attachment encoding." });
+              bytes += data.length;
+              if (bytes > THREAD_MOVE_MAX_BYTES)
+                throw new ThreadMoveError({ message: "Transfer attachments exceed 32 MB." });
+              assetIds.set(oldId, id);
+              const path = safeAssetPath(
+                config.attachmentsDir,
+                `${id}${asset.path.slice(separator)}`,
+              );
+              if (NodeFS.existsSync(path)) {
+                if (!NodeFS.readFileSync(path).equals(data))
+                  throw new ThreadMoveError({
+                    message:
+                      "A previous attachment copy does not match this snapshot. Start a new move.",
+                  });
+              } else NodeFS.writeFileSync(path, data, { flag: "wx", mode: 0o600 });
+            }
+          });
+          const now = yield* DateTime.now;
+          const projections = yield* attempt(() =>
+            importedMoveProjections(bundle, projectId, checkouts, assetIds, now),
+          );
+          const events = yield* attempt(() =>
+            moveProjectionEvents(projections, bundle.transferId, digest),
+          );
+          // All records commit together. Event replay builds projections but starts no provider effects.
+          yield* sink
+            .write({ events })
+            .pipe(failed("Could not commit the destination history. The source is unchanged."));
+          committed.value = true;
+          return receipt;
+        }).pipe(
+          Effect.ensuring(
+            Effect.gen(function* () {
+              if (!committed.value)
+                for (const checkout of created) {
+                  yield* Effect.gen(function* () {
+                    yield* git.removeWorktree({
+                      cwd: destination.workspaceRoot,
+                      path: checkout.path,
+                      force: false,
+                    });
+                    const current = yield* driver.resolveCommit({
+                      cwd: destination.workspaceRoot,
+                      revision: checkout.branch,
+                    });
+                    if (current.commitSha === checkout.commit)
+                      yield* git.deleteLocalBranch({
+                        cwd: destination.workspaceRoot,
+                        refName: checkout.branch,
+                        force: true,
+                      });
+                  }).pipe(Effect.ignore);
+                }
+            }),
+          ),
+        );
+      }),
+    );
+  });
+
+  const finish = Effect.fn("ThreadMove.finish")(function* (receipt: ThreadMoveReceipt) {
+    if (
+      receipt.sourceEnvironmentId !== environmentId ||
+      receipt.destinationEnvironmentId === environmentId
+    ) {
+      return yield* new ThreadMoveError({
+        message: "The transfer receipt belongs to another environment.",
+      });
+    }
+    const sourceRoot = receipt.sources.find((entry) => entry.threadId === receipt.sourceThreadId);
+    if (sourceRoot === undefined)
+      return yield* new ThreadMoveError({
+        message: "The transfer receipt does not contain the source thread.",
+      });
+    const commandId = CommandId.make(
+      `thread-move:archive:${receipt.sourceThreadId}:${receipt.transferId}`,
+    );
+    const finalize = Effect.gen(function* () {
+      if (yield* threads.hasReceipt(commandId)) return receipt;
+      for (const source of receipt.sources) {
+        const projection = yield* threads
+          .getThreadProjection(source.threadId)
+          .pipe(failed("Could not verify the source history."));
+        yield* attempt(() => assertMoveIdle(projection));
+        const sequence = yield* store
+          .latestSequence({ threadId: source.threadId })
+          .pipe(failed("Could not verify source changes."));
+        if (sequence !== source.sequence)
+          return yield* new ThreadMoveError({
+            message:
+              "The destination copy is saved, but the source changed during transfer and has been kept active.",
+          });
+      }
+      yield* threads
+        .dispatch({
+          type: "thread.archive",
+          commandId,
+          threadId: receipt.sourceThreadId,
+          expectedMoveSequence: sourceRoot.sequence,
+        })
+        .pipe(
+          failed(
+            "The destination copy is saved; the source could not be archived and has been kept.",
+          ),
+        );
+      return receipt;
+    });
+    const childIds = [...new Set(receipt.sources.map((source) => source.threadId))]
+      .filter((id) => id !== receipt.sourceThreadId)
+      .sort();
+    return yield* childIds.reduceRight((effect, id) => executor.withLock(id, effect), finalize);
+  });
+  return ThreadMoveService.of({ export: exportThread, receive, finish });
+});
+
+export const layer = Layer.effect(ThreadMoveService, make);

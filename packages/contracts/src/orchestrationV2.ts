@@ -457,6 +457,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   historyOrigin: Schema.optional(OrchestrationV2ThreadHistoryOrigin),
+  /** A moved thread starts a fresh provider conversation using its saved history. */
+  pendingContextImport: Schema.optional(Schema.Boolean),
   linkOrigin: Schema.optional(OrchestrationV2LinkOrigin),
   delegatedFrom: Schema.optional(OrchestrationV2DelegatedFrom),
   lineage: OrchestrationV2AppThreadLineage,
@@ -2935,6 +2937,7 @@ export const OrchestrationV2Command = Schema.Union([
     type: Schema.Literal("thread.archive"),
     commandId: CommandId,
     threadId: ThreadId,
+    expectedMoveSequence: Schema.optional(NonNegativeInt),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.guest-share.close"),

@@ -12,6 +12,7 @@ import {
   CheckpointId,
   CheckpointRef,
   CommandId,
+  EnvironmentId,
   ContextTransferId,
   EventId,
   MessageId,
@@ -36,6 +37,8 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Context from "effect/Context";
+import * as FileSystem from "effect/FileSystem";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
@@ -50,6 +53,9 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as ServerConfig from "../config.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as ThreadMoveService from "./ThreadMoveService.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as OrchestrationEventStore from "../persistence/OrchestrationEventStore.ts";
 import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
@@ -2219,6 +2225,270 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
     }),
   );
 });
+
+it.effect(
+  "moves full saved history and file attachments, reconciles retries and resumes with portable context",
+  () =>
+    Effect.gen(function* () {
+      let availableCommit = false;
+      const branches = new Set<string>();
+      const services = yield* Layer.build(
+        Layer.mergeAll(
+          layerTest,
+          EventStore.layer,
+          layerServerConfig,
+          Layer.mock(GitVcsDriver.GitVcsDriver)({
+            resolveCommit: () => Effect.succeed({ commitSha: "a".repeat(40) }),
+          }),
+          Layer.mock(GitWorkflow.GitWorkflowService)({
+            hasCommit: () => Effect.sync(() => availableCommit),
+            fetchRemote: () => Effect.void,
+            createWorktree: ({ newRefName }) =>
+              Effect.sync(() => {
+                const branch = newRefName ?? "detached";
+                if (branches.has(branch)) throw new Error("Branch already exists");
+                branches.add(branch);
+                return { worktree: { path: "/workspace/moved-worktree", refName: branch } };
+              }),
+            removeWorktree: () => Effect.void,
+            deleteLocalBranch: ({ refName }) =>
+              Effect.sync(() => {
+                branches.delete(refName);
+              }),
+            localStatus: () =>
+              Effect.succeed({
+                isRepo: false,
+                hasPrimaryRemote: false,
+                isDefaultRef: false,
+                refName: null,
+                hasWorkingTreeChanges: false,
+                workingTree: { files: [], insertions: 0, deletions: 0 },
+              }),
+          }),
+        ).pipe(
+          Layer.provideMerge(SqlitePersistence.layerMemory),
+          Layer.provideMerge(layerPlatformTest),
+        ),
+      );
+      const orchestrator = Context.get(services, Orchestrator.OrchestratorV2);
+      const sink = Context.get(services, EventSink.EventSinkV2);
+      const config = Context.get(services, ServerConfig.ServerConfig);
+      const fs = Context.get(services, FileSystem.FileSystem);
+      const sourceEnvironment = EnvironmentId.make("source-machine");
+      const targetEnvironment = EnvironmentId.make("destination-machine");
+      const makeMoves = (environmentId: EnvironmentId) =>
+        Layer.build(
+          ThreadMoveService.layer.pipe(
+            Layer.provide(Layer.succeedContext(services)),
+            Layer.provide(
+              Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
+                getEnvironmentId: Effect.succeed(environmentId),
+              }),
+            ),
+          ),
+        ).pipe(Effect.map((context) => Context.get(context, ThreadMoveService.ThreadMoveService)));
+      const source = yield* makeMoves(sourceEnvironment);
+      const destination = yield* makeMoves(targetEnvironment);
+      const sourceId = ThreadId.make("thread:move-full-history");
+      const projectId = ProjectId.make("project:move-full-history");
+      const now = yield* DateTime.now;
+      yield* seedProject({
+        projectId,
+        title: "Move project",
+        workspaceRoot: "/workspace",
+        defaultModelSelection: modelSelection,
+        createdAt: DateTime.formatIso(now),
+      }).pipe(Effect.provide(services));
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("create-move-source"),
+        threadId: sourceId,
+        projectId,
+        title: "History to move",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const messageId = MessageId.make("move:question");
+      const historicalRunId = RunId.make("move:completed-run");
+      const attachmentId = "thread-move-full-history-11111111-1111-4111-a111-111111111111-pdf";
+      const attachmentBytes = new TextEncoder().encode("saved file bytes");
+      yield* fs.writeFile(`${config.attachmentsDir}/${attachmentId}.pdf`, attachmentBytes);
+      const attachment = {
+        id: attachmentId,
+        type: "file" as const,
+        name: "notes.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: attachmentBytes.length,
+      };
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make("move:run"),
+            threadId: sourceId,
+            occurredAt: now,
+            type: "run.created",
+            payload: {
+              id: historicalRunId,
+              threadId: sourceId,
+              ordinal: 1,
+              providerInstanceId: modelSelection.instanceId,
+              modelSelection,
+              providerThreadId: null,
+              userMessageId: messageId,
+              rootNodeId: null,
+              activeAttemptId: null,
+              status: "completed",
+              requestedAt: now,
+              startedAt: now,
+              completedAt: now,
+              checkpointId: null,
+              contextHandoffId: null,
+            },
+          },
+          {
+            id: EventId.make("move:message"),
+            threadId: sourceId,
+            occurredAt: now,
+            type: "message.updated",
+            payload: {
+              id: messageId,
+              threadId: sourceId,
+              runId: historicalRunId,
+              nodeId: null,
+              role: "user",
+              text: "Remember the saved decision",
+              attachments: [attachment],
+              streaming: false,
+              createdBy: "user",
+              creationSource: "web",
+              createdAt: now,
+              updatedAt: now,
+            },
+          },
+          {
+            id: EventId.make("move:item"),
+            threadId: sourceId,
+            occurredAt: now,
+            type: "turn-item.updated",
+            payload: {
+              id: TurnItemId.make("move:saved-input"),
+              threadId: sourceId,
+              runId: historicalRunId,
+              nodeId: null,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 0,
+              type: "user_message",
+              status: "completed",
+              title: null,
+              messageId,
+              inputIntent: "turn_start",
+              text: "Remember the saved decision",
+              attachments: [attachment],
+              createdBy: "user",
+              creationSource: "web",
+              startedAt: now,
+              completedAt: now,
+              updatedAt: now,
+            },
+          },
+        ],
+      });
+      let bundle = yield* source.export({
+        threadId: sourceId,
+        transferId: "f1616321-3e1c-41fb-8357-d1d3dc4eae42",
+      });
+      assert.equal(bundle.assets.length, 1);
+      const unsafe = yield* destination
+        .receive({
+          projectId,
+          bundle: { ...bundle, assets: [{ path: "../outside.pdf", data: "YQ==" }] },
+        })
+        .pipe(Effect.flip);
+      assert.include(unsafe.message, "Invalid transfer attachment path");
+      assert.isNull((yield* orchestrator.getThreadProjection(sourceId)).thread.archivedAt);
+      const missingCommit = yield* destination
+        .receive({
+          projectId,
+          bundle: {
+            ...bundle,
+            projections: bundle.projections.map((entry) => ({
+              ...entry,
+              commitSha: "a".repeat(40),
+            })),
+          },
+        })
+        .pipe(Effect.flip);
+      assert.include(missingCommit.message, "Push its branch first");
+      availableCommit = true;
+      bundle = {
+        ...bundle,
+        projections: bundle.projections.map((entry) => ({ ...entry, commitSha: "a".repeat(40) })),
+      };
+      const failedCopy = yield* destination
+        .receive({
+          projectId,
+          bundle: { ...bundle, assets: [{ ...bundle.assets[0]!, data: "invalid-base64" }] },
+        })
+        .pipe(Effect.flip);
+      assert.include(failedCopy.message, "Invalid attachment encoding");
+      const receipt = yield* destination.receive({ projectId, bundle });
+      assert.deepEqual(yield* destination.receive({ projectId, bundle }), receipt);
+      const imported = yield* orchestrator.getThreadProjection(receipt.destinationThreadId);
+      assert.equal(imported.messages.length, 1);
+      assert.equal(imported.runs.length, 1);
+      assert.equal(imported.messages[0]?.text, "Remember the saved decision");
+      const copied = imported.messages[0]!.attachments[0]!;
+      assert.deepEqual(
+        yield* fs.readFile(`${config.attachmentsDir}/${copied.id}.pdf`),
+        attachmentBytes,
+      );
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("edit-import"),
+        threadId: receipt.destinationThreadId,
+        title: "Destination edited",
+      });
+      yield* destination.receive({ projectId, bundle });
+      assert.equal(
+        (yield* orchestrator.getThreadProjection(receipt.destinationThreadId)).thread.title,
+        "Destination edited",
+      );
+      yield* source.finish(receipt);
+      yield* source.finish(receipt);
+      assert.isNotNull((yield* orchestrator.getThreadProjection(sourceId)).thread.archivedAt);
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("continue-moved-history"),
+        threadId: receipt.destinationThreadId,
+        messageId: MessageId.make("continue-move"),
+        text: "Continue here",
+        attachments: [],
+        dispatchMode: { type: "defer_start" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const continued = yield* orchestrator.getThreadProjection(receipt.destinationThreadId);
+      assert.include(
+        continued.contextHandoffs.at(-1)?.summaryText ?? "",
+        "Remember the saved decision",
+      );
+      const collision = yield* destination
+        .receive({
+          projectId,
+          bundle: { ...bundle, assets: [{ ...bundle.assets[0]!, data: "ZGlmZmVyZW50" }] },
+        })
+        .pipe(Effect.flip);
+      assert.include(collision.message, "different snapshot");
+    }),
+);
 
 it.layer(layerLegacyImportTest)("OrchestrationV2 legacy import", (it) => {
   it.effect("hydrates imported transcripts before commands and propagates hydration failures", () =>

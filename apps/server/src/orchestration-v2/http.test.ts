@@ -34,6 +34,8 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as OrchestrationEventStore from "../persistence/OrchestrationEventStore.ts";
 import { ProjectEnrichmentService } from "../project/ProjectEnrichmentService.ts";
 import * as OrchestrationHttp from "./http.ts";
+import * as ThreadMoveHttp from "./ThreadMoveHttp.ts";
+import * as ThreadMoveService from "./ThreadMoveService.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
@@ -41,9 +43,9 @@ import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 
-class TranscriptTestApi extends HttpApi.make("environment").add(
-  EnvironmentHttpApi.groups.orchestration,
-) {}
+class TranscriptTestApi extends HttpApi.make("environment")
+  .add(EnvironmentHttpApi.groups.orchestration)
+  .add(EnvironmentHttpApi.groups.threadMove) {}
 const decodeTranscript = Schema.decodeUnknownEffect(
   Schema.toCodecJson(OrchestrationV2ThreadTranscript),
 );
@@ -130,6 +132,8 @@ const serveOrchestrationHttp = (allowed: () => boolean) =>
     });
     const routes = HttpApiBuilder.layer(TranscriptTestApi).pipe(
       Layer.provide(OrchestrationHttp.layer),
+      Layer.provide(ThreadMoveHttp.layer),
+      Layer.provide(Layer.mock(ThreadMoveService.ThreadMoveService)({})),
       Layer.provide(
         Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
           getEnvironmentId: Effect.succeed(environmentId),
@@ -159,6 +163,28 @@ const serveOrchestrationHttp = (allowed: () => boolean) =>
     yield* Effect.addFinalizer(() => Effect.promise(dispose));
     return { services, eventSink, handler };
   });
+
+it.effect("refuses thread migration to a read-only client", () =>
+  Effect.gen(function* () {
+    const { handler } = yield* serveOrchestrationHttp(() => true);
+    const response = yield* Effect.promise(() =>
+      handler(
+        new Request("http://localhost/api/orchestration/thread-move/export", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            [ORCHESTRATION_PROTOCOL_HEADER]: ORCHESTRATION_PROTOCOL_VERSION_TEXT,
+          },
+          body: JSON.stringify({
+            threadId: thread.id,
+            transferId: "c39671d4-1603-4996-9b35-19ebce82fb41",
+          }),
+        }),
+      ),
+    );
+    expect(response.status).toBe(403);
+  }),
+);
 
 it.effect("exports full history with size, scope, and missing-thread checks", () =>
   Effect.gen(function* () {

@@ -8,6 +8,13 @@ import * as HttpApiMiddleware from "effect/http-api/HttpApiMiddleware";
 import * as HttpApiSchema from "effect/http-api/HttpApiSchema";
 import * as HttpServerRespondable from "effect/http/HttpServerRespondable";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
+import {
+  ThreadMoveBundle,
+  ThreadMoveExportInput,
+  ThreadMoveImportInput,
+  ThreadMoveReceipt,
+  ThreadMoveError,
+} from "./threadMove.ts";
 
 import {
   AuthAccessTokenResult,
@@ -680,6 +687,32 @@ const EnvironmentOrchestrationThreadHistoryErrors = [
   EnvironmentInternalError,
 ] as const;
 
+class EnvironmentThreadMoveHttpApi extends HttpApiGroup.make("threadMove")
+  .add(
+    HttpApiEndpoint.post("threadMoveExport", "/api/orchestration/thread-move/export", {
+      headers: OrchestrationProtocolHeaders,
+      payload: ThreadMoveExportInput,
+      success: ThreadMoveBundle,
+      error: [ThreadMoveError, ...EnvironmentOrchestrationThreadSnapshotErrors],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("threadMoveImport", "/api/orchestration/thread-move/import", {
+      headers: OrchestrationProtocolHeaders,
+      payload: ThreadMoveImportInput,
+      success: ThreadMoveReceipt,
+      error: [ThreadMoveError, ...EnvironmentOrchestrationThreadSnapshotErrors],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("threadMoveFinish", "/api/orchestration/thread-move/finish", {
+      headers: OrchestrationProtocolHeaders,
+      payload: ThreadMoveReceipt,
+      success: ThreadMoveReceipt,
+      error: [ThreadMoveError, ...EnvironmentOrchestrationThreadSnapshotErrors],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
 class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
   .add(
     HttpApiEndpoint.get("shellSnapshot", "/api/orchestration/shell", {
@@ -842,6 +875,7 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentMcpOAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
+  .add(EnvironmentThreadMoveHttpApi)
   .add(EnvironmentPullRequestsHttpApi)
   .add(EnvironmentProjectsHttpApi)
   .add(EnvironmentConnectHttpApi)

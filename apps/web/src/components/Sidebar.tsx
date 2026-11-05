@@ -158,6 +158,7 @@ import { environmentPresentations } from "../state/presentation";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { environmentProjects } from "../state/projects";
 import { threadEnvironment } from "../state/threads";
+import { openMoveThreadDialog } from "./MoveThreadDialog";
 import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../state/olderSettledShelf";
 import { useThreadSearch } from "../state/queries";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
@@ -2734,6 +2735,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               ),
               canTurnIntoProject: canTurnThreadIntoProject(threadRef),
               supports: {
+                threadMove:
+                  serverConfigs.get(thread.environmentId)?.environment.capabilities.threadMove ===
+                  true,
                 settlement: configLoaded,
                 autoSettleOptOut: supportsAutoSettleOptOut,
                 snooze: configLoaded,
@@ -2769,6 +2773,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             return;
           case "show-last-subagents":
             setLastSubagentRequest(threadRef);
+            return;
+          case "move-machine":
+            openMoveThreadDialog(threadRef);
             return;
           case "filter-by-project":
             if (threadProjectGroup) {

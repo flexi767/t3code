@@ -3,6 +3,7 @@ import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled"
 
 export type ThreadActionMenuId =
   | "find"
+  | "move-machine"
   | "show-subagents"
   | "hide-subagents"
   | "show-last-subagents"
@@ -92,6 +93,7 @@ export interface ThreadActionMenuState {
     readonly snooze: boolean;
     readonly pinning: boolean;
     readonly titleRegeneration: boolean;
+    readonly threadMove?: boolean;
   };
   readonly snoozePresets: ReadonlyArray<SnoozePreset>;
   /** Guest links need their own grant, so the caller checks it instead of `canOperate`. */
@@ -124,6 +126,16 @@ export function buildThreadActionMenuItems(
   state: ThreadActionMenuState,
 ): ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> {
   const items: ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> = [
+    ...(state.supports.threadMove
+      ? [
+          {
+            id: "move-machine" as const,
+            label: "Move to another machine…",
+            icon: "arrow-right" as const,
+            disabled: state.isRunning || !state.canOperate,
+          },
+        ]
+      : []),
     ...(state.subagentGroup?.expanded || state.subagentGroup?.active
       ? [
           {
