@@ -1192,11 +1192,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         working={thread.runtime?.status === "running"}
       />
       {remoteMachineIcon}
-      <SidebarProviderStack
-        thread={thread}
-        providerEntryByInstanceId={props.providerEntryByInstanceId}
-      />
-      <span aria-label={modelLabel}>{compactSessionModel(modelLabel)}</span>
+      <span className="inline-flex shrink-0 items-center gap-0">
+        <SidebarProviderStack
+          thread={thread}
+          providerEntryByInstanceId={props.providerEntryByInstanceId}
+        />
+        <span aria-label={modelLabel}>{compactSessionModel(modelLabel)}</span>
+      </span>
     </span>
   );
   const metaLine = metaLineEmpty ? null : (
