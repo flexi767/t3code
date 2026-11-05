@@ -737,6 +737,7 @@ fn ui(args: &BTreeMap<String, String>) -> Result<()> {
         "scripts/",
         "docs/",
         "native/fork-deploy/",
+        "native/agent-leases/",
     ];
     if let Some(unsafe_path) = changed
         .lines()
