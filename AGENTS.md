@@ -98,6 +98,11 @@ An empty database is a bad test. Seed your worktree's `.t3` with a copy of real 
 
 ## Verifying
 
+Before editing a package, use `~/.local/bin/t3-agent-lease` to claim its repository-relative path
+in J's shared registry; renew before expiry and release on completion. Conflicts,
+lost leases and registry errors stop writes to that scope. See
+[package leases](docs/operations/package-leases.md) for commands and standalone-agent access.
+
 ### Personal fork fleet
 
 For web-only changes on M5, use `scripts/fork-deploy ui` and reload the window; CLI versions and active servers stay unchanged.

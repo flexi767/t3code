@@ -1,0 +1,10 @@
+[package]
+name = "t3-agent-lease"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+publish = false
+license = "MIT"
+
+[dependencies]
+serde_json = "1.0.150"
