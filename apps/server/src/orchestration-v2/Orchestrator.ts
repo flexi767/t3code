@@ -13253,6 +13253,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                   cause,
                 }),
             });
+            if (moving.thread.archivedAt !== null) {
+              const sequence = yield* eventSink
+                .latestSequence({ threadId: source.threadId })
+                .pipe(mapDispatchError(command));
+              if (sequence !== source.sequence)
+                return yield* new OrchestratorDispatchError({
+                  commandId: command.commandId,
+                  commandType: command.type,
+                  cause: "An archived source changed during the move.",
+                });
+              continue;
+            }
             yield* dispatchThreadMutation(
               {
                 ...command,
@@ -13644,6 +13656,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           command.type === "thread.interrupt.unresponsive" ||
           command.type === "thread.stop" ||
           command.type === "subagent.stop" ||
+          (command.type === "thread.archive" && command.expectedMoveSources !== undefined) ||
           // Closing a share again, or after it ended, is not an error.
           command.type === "thread.guest-share.close" ||
           (command.type === "thread.delete" && command.onlyIfUnused === true),

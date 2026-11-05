@@ -114,6 +114,16 @@ it.effect(
         expectedMoveSources: refreshed,
       });
       for (const id of ids) assert.isNotNull((yield* projections.getThread(id)).archivedAt);
+      const archived = yield* Effect.forEach(ids, (threadId) =>
+        sink.latestSequence({ threadId }).pipe(Effect.map((sequence) => ({ threadId, sequence }))),
+      );
+      const satisfied = yield* orchestrator.dispatch({
+        type: "thread.archive",
+        commandId: CommandId.make("move:already-retired"),
+        threadId: ids[0]!,
+        expectedMoveSources: archived,
+      });
+      assert.equal(satisfied.storedEvents.length, 0);
     }).pipe(Effect.provide(layerTest)),
 );
 

@@ -8,7 +8,11 @@ import { publishMoveFile } from "./ThreadMoveService.ts";
 
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-  return { ...actual, writeFileSync: vi.fn(actual.writeFileSync) };
+  return {
+    ...actual,
+    writeFileSync: vi.fn(actual.writeFileSync),
+    unlinkSync: vi.fn(actual.unlinkSync),
+  };
 });
 
 it("keeps partial writes out of final attachment names and safely retries publication", async () => {
@@ -33,6 +37,18 @@ it("keeps partial writes out of final attachment names and safely retries public
     assert.throws(() => publishMoveFile(path, Buffer.from("different")), "does not match");
     assert.deepEqual(NodeFS.readFileSync(path), bytes);
     assert.deepEqual(NodeFS.readdirSync(directory), ["attachment.bin"]);
+    const cleanupPath = NodePath.join(directory, "cleanup.bin");
+    vi.mocked(NodeFS.writeFileSync).mockImplementationOnce((file, _data, options) => {
+      write(file, Buffer.from("partial"), options);
+      throw new Error("Primary write failure");
+    });
+    vi.mocked(NodeFS.unlinkSync).mockImplementationOnce(() => {
+      throw new Error("Secondary cleanup failure");
+    });
+    assert.throws(() => publishMoveFile(cleanupPath, bytes), "Primary write failure");
+    assert.isFalse(NodeFS.existsSync(cleanupPath));
+    publishMoveFile(cleanupPath, bytes);
+    assert.deepEqual(NodeFS.readFileSync(cleanupPath), bytes);
   } finally {
     NodeFS.rmSync(directory, { recursive: true, force: true });
   }

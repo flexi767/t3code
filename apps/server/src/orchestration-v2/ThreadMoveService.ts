@@ -130,7 +130,11 @@ export function publishMoveFile(path: string, bytes: Uint8Array): void {
       }
     }
   } finally {
-    if (NodeFS.existsSync(temporary)) NodeFS.unlinkSync(temporary);
+    try {
+      if (NodeFS.existsSync(temporary)) NodeFS.unlinkSync(temporary);
+    } catch {
+      /* A stale temporary file must not mask the primary publication error. */
+    }
   }
 }
 
@@ -175,6 +179,7 @@ const make = Effect.gen(function* () {
       const current = yield* threads
         .getThreadProjection(id)
         .pipe(failed("Could not read side chats."));
+      if (id !== input.threadId && current.thread.deletedAt !== null) continue;
       for (const transfer of current.contextTransfers) {
         if (
           transfer.type !== "fork" ||
@@ -198,6 +203,10 @@ const make = Effect.gen(function* () {
         .listAppOwnedChildThreadIds(id)
         .pipe(failed("Could not read subthreads."))) {
         if (!selected.has(child)) {
+          const shell = yield* threads
+            .getThreadShell(child)
+            .pipe(failed("Could not inspect subthread state."));
+          if (shell === null || shell.deletedAt !== null) continue;
           selected.add(child);
           selectedQueue.push(child);
         }
@@ -213,7 +222,9 @@ const make = Effect.gen(function* () {
       const { projection, snapshotSequence } = yield* threads
         .getThreadSnapshot(id)
         .pipe(failed("Could not export the full thread."));
-      if (!selected.has(id)) {
+      if (selected.has(id) && id !== input.threadId && projection.thread.deletedAt !== null)
+        continue;
+      if (!selected.has(id) || (id !== input.threadId && projection.thread.archivedAt !== null)) {
         projections.push({ projection, sequence: snapshotSequence, move: false, commitSha: null });
         for (const reference of relatedThreadIds(projection))
           if (!seen.has(reference)) queue.push(reference);

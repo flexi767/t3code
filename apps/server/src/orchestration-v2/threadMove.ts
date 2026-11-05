@@ -292,7 +292,7 @@ export function importedMoveProjections(
               },
             }
           : {}),
-        archivedAt: move ? null : now,
+        archivedAt: mapped.thread.archivedAt ?? (move ? null : now),
         deletedAt: null,
       },
       providerSessions: mapped.providerSessions.map((session) => ({

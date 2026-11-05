@@ -4,7 +4,8 @@
 
 Connect both environments, then right-click a thread and choose **Move to another machine…**.
 Select a project on the destination. Each moved thread gets its own checkout, even when it shared
-one with its parent on the source. Fork ancestor snapshots are retained in the destination's Archive
+one with its parent on the source. Archived descendants stay archived, and deleted descendants are
+omitted. Fork ancestor snapshots are retained in the destination's Archive
 so inherited history can still be read. The desktop command palette and mobile thread menu offer
 the same action when both servers support it.
 

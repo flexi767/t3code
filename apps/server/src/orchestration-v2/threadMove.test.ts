@@ -215,7 +215,8 @@ it("preserves child grouping, archives context dependencies, and detaches a move
   const input = bundle();
   const childId = ThreadId.make("thread:child");
   const ancestorId = ThreadId.make("thread:ancestor");
-  const root = projection();
+  const activeRoot = projection();
+  const root = { ...activeRoot, thread: { ...activeRoot.thread, archivedAt: now } };
   const child = projection(childId);
   const ancestor = projection(ancestorId);
   const entries = [
@@ -259,6 +260,7 @@ it("preserves child grouping, archives context dependencies, and detaches a move
     now,
   );
   assert.isNull(result[0]?.thread.lineage.parentThreadId);
+  assert.deepEqual(result[0]?.thread.archivedAt, now);
   assert.equal(result[1]?.thread.lineage.parentThreadId, result[0]?.thread.id);
   assert.deepEqual(result[2]?.thread.archivedAt, now);
 });

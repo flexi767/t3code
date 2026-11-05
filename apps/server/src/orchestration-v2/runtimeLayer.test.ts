@@ -2621,11 +2621,89 @@ it.effect(
           },
         ],
       });
+      const archivedAppId = ThreadId.make("move:archived-app-child");
+      const deletedAppId = ThreadId.make("move:deleted-app-child");
+      const archivedSideId = ThreadId.make("move:archived-side-chat");
+      yield* orchestrator.dispatch({
+        type: "thread.fork",
+        commandId: CommandId.make("move:archived-side"),
+        sourceThreadId: sourceId,
+        targetThreadId: archivedSideId,
+        sourcePoint: { type: "latest_stable" },
+        sideChat: true,
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.archive",
+        commandId: CommandId.make("move:archive-side"),
+        threadId: archivedSideId,
+      });
+      const sourceThread = (yield* orchestrator.getThreadProjection(sourceId)).thread;
+      for (const [childId, deleted] of [
+        [archivedAppId, false],
+        [deletedAppId, true],
+      ] as const) {
+        yield* sink.write({
+          events: [
+            {
+              id: EventId.make(`move:create:${childId}`),
+              threadId: childId,
+              occurredAt: now,
+              type: "thread.created",
+              payload: {
+                ...sourceThread,
+                id: childId,
+                forkedFrom: null,
+                lineage: {
+                  parentThreadId: sourceId,
+                  rootThreadId: sourceId,
+                  relationshipToParent: "subagent",
+                },
+                archivedAt: deleted ? null : now,
+                deletedAt: deleted ? now : null,
+              },
+            },
+            {
+              id: EventId.make(`move:subagent:${childId}`),
+              threadId: sourceId,
+              occurredAt: now,
+              type: "subagent.updated",
+              payload: {
+                id: NodeId.make(`move:subagent:${childId}`),
+                threadId: sourceId,
+                runId: historicalRunId,
+                parentNodeId: NodeId.make("move:parent"),
+                origin: "app_owned",
+                createdBy: "agent",
+                driver,
+                providerInstanceId: modelSelection.instanceId,
+                providerThreadId: null,
+                childThreadId: childId,
+                nativeTaskRef: null,
+                prompt: "Finished task",
+                title: "Finished child",
+                model: modelSelection.model,
+                status: "completed",
+                result: "Done",
+                startedAt: now,
+                completedAt: now,
+                updatedAt: now,
+              },
+            },
+          ],
+        });
+      }
       let bundle = yield* source.export({
         threadId: sourceId,
         transferId: "f1616321-3e1c-41fb-8357-d1d3dc4eae42",
       });
       assert.equal(bundle.assets.length, 3);
+      assert.isFalse(
+        bundle.projections.some((entry) => entry.projection.thread.id === deletedAppId),
+      );
+      for (const id of [archivedAppId, archivedSideId])
+        assert.isFalse(bundle.projections.find((entry) => entry.projection.thread.id === id)!.move);
       assert.isFalse(
         bundle.projections.find((entry) => entry.projection.thread.id === ancestorId)!.move,
       );
@@ -2707,6 +2785,13 @@ it.effect(
       const receipt = yield* destination.receive({ projectId, bundle });
       assert.deepEqual(yield* destination.receive({ projectId, bundle }), receipt);
       const imported = yield* orchestrator.getThreadProjection(receipt.destinationThreadId);
+      for (const id of [archivedAppId, archivedSideId]) {
+        const snapshot = yield* orchestrator.getThreadProjection(
+          ThreadId.make(movedThreadId(bundle.transferId, id)),
+        );
+        assert.isNotNull(snapshot.thread.archivedAt);
+        assert.isFalse(receipt.sources.some((entry) => entry.threadId === id));
+      }
       assert.isTrue(yield* fs.exists(imported.thread.worktreePath!));
       const importedChild = yield* orchestrator.getThreadProjection(
         ThreadId.make(movedThreadId(bundle.transferId, sideChatId)),
