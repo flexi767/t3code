@@ -119,6 +119,28 @@ export function ContextWindowMeter(props: {
         className="max-w-52 text-left whitespace-normal"
       >
         <div className="flex min-w-0 flex-col gap-1 px-2 py-1.5">
+          {onCompact ? (
+            <>
+              <Button
+                size="micro"
+                variant="ghost-muted"
+                className="self-start"
+                disabled={compactDisabled}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onCompact();
+                }}
+              >
+                <Minimize2Icon aria-hidden="true" className="size-3" />
+                Compact
+              </Button>
+              {compactDisabled && compactDisabledReason ? (
+                <div className="text-secondary-label text-2xs leading-tight">
+                  {compactDisabledReason}
+                </div>
+              ) : null}
+            </>
+          ) : null}
           {missing ? null : (
             <div className="flex items-center justify-between gap-2">
               {usage.maxTokens !== null && usedPercentage ? (
@@ -185,28 +207,6 @@ export function ContextWindowMeter(props: {
             <div className="mt-1 text-pretty text-secondary-label text-2xs font-medium">
               {formatContextWindowCompactionMessage(modelDisplayName, usage.autoCompactThreshold)}
             </div>
-          ) : null}
-          {onCompact ? (
-            <>
-              <Button
-                size="micro"
-                variant="ghost-muted"
-                className="self-start"
-                disabled={compactDisabled}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onCompact();
-                }}
-              >
-                <Minimize2Icon aria-hidden="true" className="size-3" />
-                Compact
-              </Button>
-              {compactDisabled && compactDisabledReason ? (
-                <div className="text-secondary-label text-2xs leading-tight">
-                  {compactDisabledReason}
-                </div>
-              ) : null}
-            </>
           ) : null}
         </div>
       </PopoverPopup>
