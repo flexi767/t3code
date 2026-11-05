@@ -63,6 +63,61 @@ const layerTest = Layer.mergeAll(
 );
 
 it.effect(
+  "retires a moved set atomically and keeps every source when a child revision changes",
+  () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const sink = yield* EventSink.EventSinkV2;
+      const ids = [ThreadId.make("move:atomic-root"), ThreadId.make("move:atomic-child")];
+      for (const threadId of ids)
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`create:${threadId}`),
+          threadId,
+          projectId: ProjectId.make("move:project"),
+          title: "Move source",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "user",
+          creationSource: "web",
+        });
+      const sources = yield* Effect.forEach(ids, (threadId) =>
+        sink.latestSequence({ threadId }).pipe(Effect.map((sequence) => ({ threadId, sequence }))),
+      );
+      yield* orchestrator.dispatch({
+        type: "thread.metadata.update",
+        commandId: CommandId.make("move:child-edit"),
+        threadId: ids[1]!,
+        title: "Changed during copy",
+      });
+      const failure = yield* orchestrator
+        .dispatch({
+          type: "thread.archive",
+          commandId: CommandId.make("move:stale-batch"),
+          threadId: ids[0]!,
+          expectedMoveSources: sources,
+        })
+        .pipe(Effect.flip);
+      assert.instanceOf(failure, Orchestrator.OrchestratorDispatchError);
+      for (const id of ids) assert.isNull((yield* projections.getThread(id)).archivedAt);
+      const refreshed = yield* Effect.forEach(ids, (threadId) =>
+        sink.latestSequence({ threadId }).pipe(Effect.map((sequence) => ({ threadId, sequence }))),
+      );
+      yield* orchestrator.dispatch({
+        type: "thread.archive",
+        commandId: CommandId.make("move:fresh-batch"),
+        threadId: ids[0]!,
+        expectedMoveSources: refreshed,
+      });
+      for (const id of ids) assert.isNotNull((yield* projections.getThread(id)).archivedAt);
+    }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect(
   "records approval feedback and targets only its runtime request without dispatching a parent turn",
   () =>
     Effect.gen(function* () {

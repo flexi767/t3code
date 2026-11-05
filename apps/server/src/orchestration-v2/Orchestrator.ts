@@ -117,6 +117,7 @@ import {
   visibleConversationItems,
   visibleDeltaRunOrdinals,
 } from "./ContextHandoffService.ts";
+import { assertMoveIdle } from "./threadMove.ts";
 import { notificationTurnItem } from "@t3tools/provider-core/server/notification";
 import {
   cancelledBeforeStart,
@@ -13232,7 +13233,40 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           effects: plans.flatMap((plan) => plan.effects),
         };
       }
-      case "thread.archive":
+      case "thread.archive": {
+        if (command.expectedMoveSources !== undefined) {
+          for (const source of command.expectedMoveSources) {
+            const moving = yield* projectionStore
+              .getThreadRecords(source.threadId, [
+                "runs",
+                "runtimeRequests",
+                "providerThreads",
+                "subagents",
+              ])
+              .pipe(mapDispatchError(command));
+            yield* Effect.try({
+              try: () => assertMoveIdle(moving),
+              catch: (cause) =>
+                new OrchestratorDispatchError({
+                  commandId: command.commandId,
+                  commandType: command.type,
+                  cause,
+                }),
+            });
+            yield* dispatchThreadMutation(
+              {
+                ...command,
+                expectedMoveSources: undefined,
+                threadId: source.threadId,
+                expectedMoveSequence: source.sequence,
+              },
+              events,
+              effects,
+            );
+          }
+        } else yield* dispatchThreadMutation(command, events, effects);
+        break;
+      }
       case "thread.unarchive":
       case "thread.settle":
       case "thread.unsettle":
@@ -13773,6 +13807,32 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
   // dispatchWithReceiptEffect owns the dispatch span; this wrapper selects the thread locks.
   const dispatchWithReceipt = Effect.fnUntraced(function* (command: OrchestrationV2ServerCommand) {
+    if (command.type === "thread.archive" && command.expectedMoveSources !== undefined) {
+      const ids = [
+        ...new Set([
+          command.threadId,
+          ...command.expectedMoveSources.map((source) => source.threadId),
+        ]),
+      ];
+      const threads = yield* Effect.forEach(ids, (id) =>
+        projectionStore.getThread(id).pipe(mapDispatchError(command)),
+      );
+      const parents = new Map(threads.map((thread) => [thread.id, thread.lineage.parentThreadId]));
+      const depth = (id: ThreadId) => {
+        const seen = new Set<ThreadId>();
+        let current: ThreadId | null | undefined = id;
+        while (current != null && parents.has(current) && !seen.has(current)) {
+          seen.add(current);
+          current = parents.get(current);
+        }
+        return seen.size;
+      };
+      const ordered = ids.sort((a, b) => depth(a) - depth(b) || a.localeCompare(b));
+      return yield* ordered.reduceRight(
+        (locked, id) => threadDispatch.withLock(id, locked),
+        dispatchWithReceiptEffect(command),
+      );
+    }
     const dispatch = threadDispatch.withLock(
       commandThreadId(command),
       dispatchWithReceiptEffect(command),

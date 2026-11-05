@@ -39,6 +39,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Context from "effect/Context";
 import * as FileSystem from "effect/FileSystem";
+import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
@@ -2401,11 +2402,66 @@ it.effect(
           },
         ],
       });
+      const sideChatId = ThreadId.make("move:side-chat");
+      const htmlId = "thread-move-full-history-22222222-2222-4222-a222-222222222222-html";
+      yield* fs.writeFileString(`${config.attachmentsDir}/${htmlId}.html`, "<p>saved render</p>");
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make("move:saved-render"),
+            threadId: sourceId,
+            occurredAt: now,
+            type: "turn-item.updated",
+            payload: {
+              id: TurnItemId.make("move:saved-render"),
+              type: "dynamic_tool",
+              ordinal: 1,
+              threadId: sourceId,
+              runId: historicalRunId,
+              nodeId: null,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              title: null,
+              status: "completed",
+              startedAt: now,
+              completedAt: now,
+              updatedAt: now,
+              toolName: "html_render",
+              input: {},
+              output: JSON.stringify({
+                content: [
+                  {
+                    type: "text",
+                    text: JSON.stringify({
+                      htmlRender: { attachmentId: htmlId, title: "Saved render", height: 300 },
+                    }),
+                  },
+                ],
+              }),
+            },
+          },
+        ],
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.fork",
+        commandId: CommandId.make("move:fork-side-chat"),
+        sourceThreadId: sourceId,
+        targetThreadId: sideChatId,
+        sourcePoint: { type: "latest_stable" },
+        sideChat: true,
+        createdBy: "user",
+        creationSource: "web",
+      });
       let bundle = yield* source.export({
         threadId: sourceId,
         transferId: "f1616321-3e1c-41fb-8357-d1d3dc4eae42",
       });
-      assert.equal(bundle.assets.length, 1);
+      assert.equal(bundle.assets.length, 2);
+      assert.isTrue(
+        bundle.projections.some((entry) => entry.move && entry.projection.thread.id === sideChatId),
+      );
       const unsafe = yield* destination
         .receive({
           projectId,
@@ -2444,6 +2500,14 @@ it.effect(
       const imported = yield* orchestrator.getThreadProjection(receipt.destinationThreadId);
       assert.equal(imported.messages.length, 1);
       assert.equal(imported.runs.length, 1);
+      const renderItem = imported.turnItems.find((item) => item.type === "dynamic_tool");
+      const render =
+        renderItem?.type === "dynamic_tool" ? htmlRenderFromToolItem(renderItem) : undefined;
+      assert.isDefined(render);
+      assert.equal(
+        yield* fs.readFileString(`${config.attachmentsDir}/${render!.attachmentId}.html`),
+        "<p>saved render</p>",
+      );
       assert.equal(imported.messages[0]?.text, "Remember the saved decision");
       const copied = imported.messages[0]!.attachments[0]!;
       assert.deepEqual(
@@ -2461,9 +2525,44 @@ it.effect(
         (yield* orchestrator.getThreadProjection(receipt.destinationThreadId)).thread.title,
         "Destination edited",
       );
-      yield* source.finish(receipt);
+      const executor = Context.get(services, ThreadCommandExecutor.ThreadCommandExecutor);
+      const staleReceipt = {
+        ...receipt,
+        transferId: "4f4847e2-ed0d-4abc-a7b4-593535dc3b60",
+        sources: receipt.sources.map((entry) => ({ ...entry, sequence: entry.sequence + 1 })),
+      };
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const rejected = yield* source.finish(staleReceipt).pipe(Effect.flip);
+        assert.include(rejected.message, "source changed");
+        assert.isNull((yield* orchestrator.getThreadProjection(sourceId)).thread.archivedAt);
+      }
+      const rootRequested = yield* Deferred.make<void>();
+      const withLock = executor.withLock;
+      let rootRequests = 0;
+      const observeLock: ThreadCommandExecutor.ThreadCommandExecutor["Service"]["withLock"] = (
+        id,
+        effect,
+      ) => {
+        if (id === sourceId && ++rootRequests === 2)
+          return Deferred.succeed(rootRequested, undefined).pipe(
+            Effect.andThen(withLock(id, effect)),
+          );
+        return withLock(id, effect);
+      };
+      using _lockSpy = vi.spyOn(executor, "withLock").mockImplementation(observeLock);
+      const finishing = yield* executor.withLock(
+        sourceId,
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(source.finish(receipt));
+          yield* Deferred.await(rootRequested);
+          yield* executor.withLock(sideChatId, Effect.void);
+          return fiber;
+        }),
+      );
+      yield* Fiber.join(finishing);
       yield* source.finish(receipt);
       assert.isNotNull((yield* orchestrator.getThreadProjection(sourceId)).thread.archivedAt);
+      assert.isNotNull((yield* orchestrator.getThreadProjection(sideChatId)).thread.archivedAt);
       yield* orchestrator.dispatch({
         type: "message.dispatch",
         commandId: CommandId.make("continue-moved-history"),

@@ -11,6 +11,49 @@ import {
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import * as DateTime from "effect/DateTime";
+import {
+  htmlRenderFromToolItem,
+  mcpAppFromToolItem,
+  previewRecordingIdFromToolItem,
+} from "@t3tools/shared/toolOutput";
+
+type ToolItem = { readonly toolName: string | null; readonly output?: unknown };
+export function movedToolAssetIds(item: ToolItem): ReadonlyArray<string> {
+  return [
+    htmlRenderFromToolItem(item)?.attachmentId,
+    mcpAppFromToolItem(item)?.attachmentId,
+    previewRecordingIdFromToolItem(item),
+  ].filter((id): id is string => id !== undefined);
+}
+
+export function movedToolOutput(item: ToolItem, assets: ReadonlyMap<string, string>): unknown {
+  const recognized = new Set(movedToolAssetIds(item));
+  const visit = (value: unknown, depth: number, key = ""): unknown => {
+    if (depth > 16) return value;
+    if (typeof value === "string") {
+      if ((key === "id" || key === "attachmentId") && recognized.has(value))
+        return assets.get(value) ?? value;
+      try {
+        const parsed: unknown = JSON.parse(value);
+        const next = visit(parsed, depth + 1);
+        return next === parsed ? value : JSON.stringify(next);
+      } catch {
+        return value;
+      }
+    }
+    if (Array.isArray(value)) {
+      const next = value.map((child) => visit(child, depth + 1));
+      return next.every((child, index) => child === value[index]) ? value : next;
+    }
+    if (value === null || typeof value !== "object") return value;
+    const entries = Object.entries(value);
+    const next = entries.map(([field, child]) => [field, visit(child, depth + 1, field)] as const);
+    return next.every((entry, index) => entry[1] === entries[index]?.[1])
+      ? value
+      : Object.fromEntries(next);
+  };
+  return recognized.size === 0 ? item.output : visit(item.output, 0);
+}
 
 export const THREAD_MOVE_MAX_BYTES = 32 * 1024 * 1024;
 const MAX_BUNDLE_BYTES = 64 * 1024 * 1024;
@@ -76,7 +119,12 @@ export function moveDigest(bundle: ThreadMoveBundle): string {
     .digest("hex");
 }
 
-export function assertMoveIdle(projection: OrchestrationV2ThreadProjection): void {
+export function assertMoveIdle(
+  projection: Pick<
+    OrchestrationV2ThreadProjection,
+    "thread" | "runs" | "runtimeRequests" | "providerThreads" | "subagents"
+  >,
+): void {
   if (
     projection.thread.deletedAt !== null ||
     projection.thread.linkOrigin !== undefined ||
@@ -165,6 +213,12 @@ export function importedMoveProjections(
     // Runtime ownership and local credentials never travel with saved history.
     return {
       ...mapped,
+      turnItems: mapped.turnItems.map((item, index) => {
+        const original = projection.turnItems[index];
+        return item.type === "dynamic_tool" && original?.type === "dynamic_tool"
+          ? { ...item, output: movedToolOutput(original, assets) }
+          : item;
+      }),
       thread: {
         ...mapped.thread,
         projectId,

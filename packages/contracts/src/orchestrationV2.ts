@@ -2938,6 +2938,9 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     expectedMoveSequence: Schema.optional(NonNegativeInt),
+    expectedMoveSources: Schema.optional(
+      Schema.Array(Schema.Struct({ threadId: ThreadId, sequence: NonNegativeInt })),
+    ),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.guest-share.close"),

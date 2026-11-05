@@ -13,6 +13,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import {
@@ -22,6 +23,7 @@ import {
   moveDigest,
   moveProjectionEvents,
   validateMoveBundle,
+  movedToolOutput,
 } from "./threadMove.ts";
 
 const now = DateTime.makeUnsafe("2026-08-01T10:00:00Z");
@@ -31,6 +33,36 @@ const transferId = "c39671d4-1603-4996-9b35-19ebce82fb41";
 const providerInstanceId = ProviderInstanceId.make("codex");
 const modelSelection = { instanceId: providerInstanceId, model: "gpt-5.4" };
 const runId = RunId.make("run:source");
+
+it("rewrites recognized assets inside serialized MCP result envelopes and preserves other text", () => {
+  const id = "thread-source-11111111-1111-4111-a111-111111111111-html";
+  const reference = {
+    htmlRender: { attachmentId: id, title: "Saved page", height: 300 },
+    text: `Keep ${id} literal`,
+  };
+  for (const output of [
+    JSON.stringify(reference),
+    { content: [{ type: "text", text: JSON.stringify(reference) }] },
+    JSON.stringify({ structuredContent: reference }),
+  ]) {
+    const moved = movedToolOutput(
+      { toolName: "html_render", output },
+      new Map([[id, "new-asset"]]),
+    );
+    assert.equal(
+      htmlRenderFromToolItem({ toolName: "html_render", output: moved })?.attachmentId,
+      "new-asset",
+    );
+    assert.include(JSON.stringify(moved), `Keep ${id} literal`);
+  }
+  assert.equal(
+    movedToolOutput(
+      { toolName: "unrelated", output: JSON.stringify(reference) },
+      new Map([[id, "new-asset"]]),
+    ),
+    JSON.stringify(reference),
+  );
+});
 
 function projection(id = sourceId): OrchestrationV2ThreadProjection {
   const messageId = MessageId.make(`message:${id}`);

@@ -36,6 +36,7 @@ import * as EventSink from "./EventSink.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import {
   assertMoveIdle,
+  movedToolAssetIds,
   importedMoveProjections,
   movedId,
   moveDigest,
@@ -126,6 +127,28 @@ const make = Effect.gen(function* () {
     const selected = new Set<ThreadId>([input.threadId]);
     const selectedQueue = [input.threadId];
     for (const id of selectedQueue) {
+      const current = yield* threads
+        .getThreadProjection(id)
+        .pipe(failed("Could not read side chats."));
+      for (const transfer of current.contextTransfers) {
+        if (
+          transfer.type !== "fork" ||
+          transfer.sourceThreadId !== id ||
+          selected.has(transfer.targetThreadId)
+        )
+          continue;
+        const childShell = yield* threads
+          .getThreadShell(transfer.targetThreadId)
+          .pipe(failed("Could not read side chats."));
+        if (childShell === null) continue;
+        const child = yield* threads
+          .getThreadProjection(transfer.targetThreadId)
+          .pipe(failed("Could not read side chats."));
+        if (child.thread.lineage.sideChat === true && child.thread.deletedAt === null) {
+          selected.add(child.thread.id);
+          selectedQueue.push(child.thread.id);
+        }
+      }
       for (const child of yield* threads
         .listAppOwnedChildThreadIds(id)
         .pipe(failed("Could not read subthreads."))) {
@@ -191,6 +214,20 @@ const make = Effect.gen(function* () {
           else if (value !== null && typeof value === "object") Object.values(value).forEach(visit);
         };
         projection.turnItems.forEach(visit);
+        for (const item of projection.turnItems) {
+          if (item.type !== "dynamic_tool") continue;
+          for (const id of movedToolAssetIds(item)) {
+            const path = resolveAttachmentPathById({
+              attachmentsDir: config.attachmentsDir,
+              attachmentId: id,
+            });
+            if (path === null)
+              throw new ThreadMoveError({
+                message: "A saved render or recording is missing on the source machine.",
+              });
+            paths.add(NodePath.basename(path));
+          }
+        }
       }
       let bytes = 0;
       return [...paths].map((path) => {
@@ -423,40 +460,19 @@ const make = Effect.gen(function* () {
     const commandId = CommandId.make(
       `thread-move:archive:${receipt.sourceThreadId}:${receipt.transferId}`,
     );
-    const finalize = Effect.gen(function* () {
-      if (yield* threads.hasReceipt(commandId)) return receipt;
-      for (const source of receipt.sources) {
-        const projection = yield* threads
-          .getThreadProjection(source.threadId)
-          .pipe(failed("Could not verify the source history."));
-        yield* attempt(() => assertMoveIdle(projection));
-        const sequence = yield* store
-          .latestSequence({ threadId: source.threadId })
-          .pipe(failed("Could not verify source changes."));
-        if (sequence !== source.sequence)
-          return yield* new ThreadMoveError({
-            message:
-              "The destination copy is saved, but the source changed during transfer and has been kept active.",
-          });
-      }
-      yield* threads
-        .dispatch({
-          type: "thread.archive",
-          commandId,
-          threadId: receipt.sourceThreadId,
-          expectedMoveSequence: sourceRoot.sequence,
-        })
-        .pipe(
-          failed(
-            "The destination copy is saved; the source could not be archived and has been kept.",
-          ),
-        );
-      return receipt;
-    });
-    const childIds = [...new Set(receipt.sources.map((source) => source.threadId))]
-      .filter((id) => id !== receipt.sourceThreadId)
-      .sort();
-    return yield* childIds.reduceRight((effect, id) => executor.withLock(id, effect), finalize);
+    yield* threads
+      .dispatch({
+        type: "thread.archive",
+        commandId,
+        threadId: receipt.sourceThreadId,
+        expectedMoveSources: receipt.sources,
+      })
+      .pipe(
+        failed(
+          "The destination copy is saved; the source changed or could not be archived and has been kept.",
+        ),
+      );
+    return receipt;
   });
   return ThreadMoveService.of({ export: exportThread, receive, finish });
 });
