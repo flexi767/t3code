@@ -4,6 +4,8 @@ import {
   MessageId,
   ProjectId,
   ProviderInstanceId,
+  ProviderDriverKind,
+  ProviderThreadId,
   RunId,
   ThreadId,
   TurnItemId,
@@ -18,6 +20,7 @@ import * as ProjectionStore from "./ProjectionStore.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import {
   assertMoveIdle,
+  localMoveProjection,
   importedMoveProjections,
   movedId,
   moveDigest,
@@ -173,6 +176,48 @@ function bundle(): ThreadMoveBundle {
     assets: [],
   };
 }
+
+it("exports child provider conversations only in their owning snapshot", () => {
+  const childId = ThreadId.make("thread:child");
+  const provider = (appThreadId: ThreadId | null, suffix: string) => ({
+    id: ProviderThreadId.make(`provider:${suffix}`),
+    driver: ProviderDriverKind.make("codex"),
+    providerInstanceId,
+    providerSessionId: null,
+    appThreadId,
+    ownerNodeId: null,
+    nativeThreadRef: null,
+    nativeConversationHeadRef: null,
+    status: "idle" as const,
+    firstRunOrdinal: null,
+    lastRunOrdinal: null,
+    handoffIds: [],
+    forkedFrom: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  const own = provider(sourceId, "parent");
+  const child = provider(childId, "child");
+  const native = provider(null, "native-child");
+  const parentSnapshot = localMoveProjection({
+    ...projection(),
+    providerThreads: [own, child, native],
+  });
+  const childSnapshot = localMoveProjection({
+    ...projection(childId),
+    providerThreads: [child],
+  });
+  assert.deepEqual(parentSnapshot.providerThreads, [own, native]);
+  assert.deepEqual(childSnapshot.providerThreads, [child]);
+  const input = bundle();
+  validateMoveBundle({
+    ...input,
+    projections: [
+      { ...input.projections[0]!, projection: parentSnapshot },
+      { ...input.projections[0]!, projection: childSnapshot },
+    ],
+  });
+});
 
 it.effect(
   "moves completed history through durable projections without rewriting prompt or tool text",

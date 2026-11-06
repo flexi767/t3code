@@ -40,6 +40,7 @@ import * as EventSink from "./EventSink.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import {
   assertMoveIdle,
+  localMoveProjection,
   movedToolAssetIds,
   importedMoveProjections,
   movedId,
@@ -232,9 +233,11 @@ const make = Effect.gen(function* () {
       if (seen.has(id)) continue;
       seen.add(id);
       yield* threads.ensureLegacyTranscript(id).pipe(failed("Could not load saved history."));
-      const { projection, snapshotSequence } = yield* threads
+      const snapshot = yield* threads
         .getThreadSnapshot(id)
         .pipe(failed("Could not export the full thread."));
+      const { snapshotSequence } = snapshot;
+      const projection = localMoveProjection(snapshot.projection);
       if (selected.has(id) && id !== input.threadId && projection.thread.deletedAt !== null)
         continue;
       if (!selected.has(id) || (id !== input.threadId && projection.thread.archivedAt !== null)) {

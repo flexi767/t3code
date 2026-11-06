@@ -61,6 +61,18 @@ const encodeProjection = Schema.encodeSync(OrchestrationV2ThreadProjectionJson);
 const decodeProjection = Schema.decodeUnknownSync(OrchestrationV2ThreadProjectionJson);
 const decodeEvent = Schema.decodeUnknownSync(OrchestrationV2DomainEvent);
 
+export function localMoveProjection(
+  projection: OrchestrationV2ThreadProjection,
+): OrchestrationV2ThreadProjection {
+  return {
+    ...projection,
+    // Parent projections also expose app-owned children's provider threads; their own snapshots carry them.
+    providerThreads: projection.providerThreads.filter(
+      (row) => row.appThreadId === null || row.appThreadId === projection.thread.id,
+    ),
+  };
+}
+
 export function validateMoveBundle(bundle: ThreadMoveBundle): void {
   const seen = new Set<string>();
   for (const { projection } of bundle.projections) {
@@ -72,7 +84,7 @@ export function validateMoveBundle(bundle: ThreadMoveBundle): void {
       for (const row of rows) {
         if (
           ("threadId" in row && row.threadId !== id) ||
-          ("appThreadId" in row && row.appThreadId !== id)
+          ("appThreadId" in row && row.appThreadId !== null && row.appThreadId !== id)
         ) {
           throw new ThreadMoveError({ message: "Transfer records belong to a different thread." });
         }
