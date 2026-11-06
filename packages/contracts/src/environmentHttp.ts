@@ -9,7 +9,7 @@ import * as HttpApiSchema from "effect/http-api/HttpApiSchema";
 import * as HttpServerRespondable from "effect/http/HttpServerRespondable";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import {
-  ThreadMoveBundle,
+  ThreadMoveArchive,
   ThreadMoveExportInput,
   ThreadMoveImportInput,
   ThreadMoveReceipt,
@@ -692,7 +692,7 @@ class EnvironmentThreadMoveHttpApi extends HttpApiGroup.make("threadMove")
     HttpApiEndpoint.post("threadMoveExport", "/api/orchestration/thread-move/export", {
       headers: OrchestrationProtocolHeaders,
       payload: ThreadMoveExportInput,
-      success: ThreadMoveBundle,
+      success: ThreadMoveArchive,
       error: [ThreadMoveError, ...EnvironmentOrchestrationThreadSnapshotErrors],
     }).middleware(EnvironmentAuthenticatedAuth),
   )

@@ -32,9 +32,15 @@ export const ThreadMoveBundle = Schema.Struct({
   assets: Schema.Array(Schema.Struct({ path: TrimmedNonEmptyString, data: Schema.String })),
 });
 export type ThreadMoveBundle = typeof ThreadMoveBundle.Type;
+/** Opaque to clients: they relay it between environments without decoding the history. */
+export const ThreadMoveArchive = Schema.Struct({
+  encoding: Schema.Literal("gzip+base64"),
+  data: Schema.String,
+});
+export type ThreadMoveArchive = typeof ThreadMoveArchive.Type;
 export const ThreadMoveImportInput = Schema.Struct({
   projectId: ProjectId,
-  bundle: ThreadMoveBundle,
+  archive: ThreadMoveArchive,
 });
 export type ThreadMoveImportInput = typeof ThreadMoveImportInput.Type;
 export const ThreadMoveReceipt = Schema.Struct({

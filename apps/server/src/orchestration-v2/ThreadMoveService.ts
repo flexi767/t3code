@@ -7,6 +7,7 @@ import {
   ThreadId,
   ThreadMoveError,
   type ProjectId,
+  type ThreadMoveArchive,
   type ThreadMoveBundle,
   type ThreadMoveImportInput,
   type ThreadMoveReceipt,
@@ -48,6 +49,8 @@ import {
   moveProjectionEvents,
   validateMoveBundle,
   THREAD_MOVE_MAX_BYTES,
+  packMoveBundle,
+  unpackMoveBundle,
   type MoveCheckout,
 } from "./threadMove.ts";
 
@@ -57,7 +60,14 @@ export class ThreadMoveService extends Context.Service<
   ThreadMoveService,
   {
     readonly export: (input: ExportInput) => Effect.Effect<ThreadMoveBundle, ThreadMoveError>;
-    readonly receive: (
+    readonly exportArchive: (
+      input: ExportInput,
+    ) => Effect.Effect<ThreadMoveArchive, ThreadMoveError>;
+    readonly receive: (input: {
+      readonly projectId: ProjectId;
+      readonly bundle: ThreadMoveBundle;
+    }) => Effect.Effect<ThreadMoveReceipt, ThreadMoveError>;
+    readonly receiveArchive: (
       input: ThreadMoveImportInput,
     ) => Effect.Effect<ThreadMoveReceipt, ThreadMoveError>;
     readonly finish: (
@@ -174,6 +184,15 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  const pack = (bundle: ThreadMoveBundle) =>
+    Effect.tryPromise({
+      try: () => packMoveBundle(bundle),
+      catch: (error) =>
+        isMoveError(error)
+          ? error
+          : new ThreadMoveError({ message: "Could not compress the transfer." }),
+    });
+
   const exportThread = Effect.fn("ThreadMove.export")(function* (input: ExportInput) {
     const selected = new Set<ThreadId>([input.threadId]);
     const selectedQueue = [input.threadId];
@@ -226,7 +245,6 @@ const make = Effect.gen(function* () {
         continue;
       yield* attempt(() => assertMoveIdle(projection));
     }
-    const prepared = new Set<string>();
     const seen = new Set<ThreadId>();
     const queue = [...selected];
     for (const id of queue) {
@@ -247,67 +265,7 @@ const make = Effect.gen(function* () {
         continue;
       }
       yield* attempt(() => assertMoveIdle(projection));
-      const row = yield* project(projection.thread.projectId);
-      const cwd = projection.thread.worktreePath ?? row.workspaceRoot;
-      let status = yield* git
-        .localStatus({ cwd, includeCheckoutDetails: true })
-        .pipe(failed("Could not inspect the source checkout."));
-      if (input.prepareRepository && status.isRepo && !prepared.has(cwd)) {
-        if (!status.refName)
-          return yield* new ThreadMoveError({
-            message: "Choose a branch before moving this checkout.",
-          });
-        const peers = yield* threads
-          .listProjectThreads({ includeSubagents: true })
-          .pipe(failed("Could not inspect other active threads."));
-        for (const peer of peers) {
-          if (peer.activeRunId === null || selected.has(peer.id)) continue;
-          const peerProject = yield* project(peer.projectId);
-          if (
-            NodePath.resolve(peer.worktreePath ?? peerProject.workspaceRoot) ===
-            NodePath.resolve(cwd)
-          )
-            return yield* new ThreadMoveError({
-              message: "Another thread is working in this checkout. Finish it before moving.",
-            });
-        }
-        if (status.hasWorkingTreeChanges)
-          yield* driver
-            .commit(cwd, "chore: save work before moving thread", "", { stage: {} })
-            .pipe(
-              failed(
-                "Could not commit checkout changes. Resolve Git conflicts or failing hooks, then retry the move.",
-              ),
-            );
-        yield* driver
-          .pushCurrentBranch(cwd, status.refName, { remoteName: "origin" })
-          .pipe(
-            failed(
-              "Could not push to origin. Any local commit is kept; check Git access or branch divergence, then retry.",
-            ),
-          );
-        status = yield* git
-          .localStatus({ cwd, includeCheckoutDetails: true })
-          .pipe(failed("Could not verify the prepared checkout."));
-        prepared.add(cwd);
-      }
-      if (selected.has(id) && status.hasWorkingTreeChanges) {
-        return yield* new ThreadMoveError({
-          message:
-            "Commit the thread's working-tree changes before moving it. Working files are not copied between machines.",
-        });
-      }
-      const commitSha = status.isRepo
-        ? (yield* driver
-            .resolveCommit({ cwd, revision: "HEAD" })
-            .pipe(failed("Could not resolve the source commit."))).commitSha
-        : null;
-      projections.push({
-        projection,
-        sequence: snapshotSequence,
-        move: selected.has(id),
-        commitSha,
-      });
+      projections.push({ projection, sequence: snapshotSequence, move: true, commitSha: null });
       for (const reference of relatedThreadIds(projection))
         if (!seen.has(reference)) queue.push(reference);
     }
@@ -371,13 +329,81 @@ const make = Effect.gen(function* () {
       assets,
     };
     yield* attempt(() => validateMoveBundle(bundle));
+    // Everything that can refuse the move runs first: preparing commits and pushes the checkout.
+    if (input.prepareRepository) yield* pack(bundle);
+    const prepared = new Set<string>();
+    for (const [index, entry] of projections.entries()) {
+      if (!entry.move) continue;
+      const { projection } = entry;
+      const row = yield* project(projection.thread.projectId);
+      const cwd = projection.thread.worktreePath ?? row.workspaceRoot;
+      let status = yield* git
+        .localStatus({ cwd, includeCheckoutDetails: true })
+        .pipe(failed("Could not inspect the source checkout."));
+      if (input.prepareRepository && status.isRepo && !prepared.has(cwd)) {
+        if (!status.refName)
+          return yield* new ThreadMoveError({
+            message: "Choose a branch before moving this checkout.",
+          });
+        const peers = yield* threads
+          .listProjectThreads({ includeSubagents: true })
+          .pipe(failed("Could not inspect other active threads."));
+        for (const peer of peers) {
+          if (peer.activeRunId === null || selected.has(peer.id)) continue;
+          const peerProject = yield* project(peer.projectId);
+          if (
+            NodePath.resolve(peer.worktreePath ?? peerProject.workspaceRoot) ===
+            NodePath.resolve(cwd)
+          )
+            return yield* new ThreadMoveError({
+              message: "Another thread is working in this checkout. Finish it before moving.",
+            });
+        }
+        if (status.hasWorkingTreeChanges)
+          yield* driver
+            .commit(cwd, "chore: save work before moving thread", "", { stage: {} })
+            .pipe(
+              failed(
+                "Could not commit checkout changes. Resolve Git conflicts or failing hooks, then retry the move.",
+              ),
+            );
+        yield* driver
+          .pushCurrentBranch(cwd, status.refName, { remoteName: "origin" })
+          .pipe(
+            failed(
+              "Could not push to origin. Any local commit is kept; check Git access or branch divergence, then retry.",
+            ),
+          );
+        status = yield* git
+          .localStatus({ cwd, includeCheckoutDetails: true })
+          .pipe(failed("Could not verify the prepared checkout."));
+        prepared.add(cwd);
+      }
+      if (status.hasWorkingTreeChanges) {
+        return yield* new ThreadMoveError({
+          message:
+            "Commit the thread's working-tree changes before moving it. Working files are not copied between machines.",
+        });
+      }
+      const commitSha = status.isRepo
+        ? (yield* driver
+            .resolveCommit({ cwd, revision: "HEAD" })
+            .pipe(failed("Could not resolve the source commit."))).commitSha
+        : null;
+      projections[index] = { ...entry, commitSha };
+    }
     return bundle;
   });
+
+  const exportArchive = (input: ExportInput) => exportThread(input).pipe(Effect.flatMap(pack));
 
   const receive = Effect.fn("ThreadMove.receive")(function* ({
     projectId,
     bundle,
-  }: ThreadMoveImportInput) {
+  }: {
+    readonly projectId: ProjectId;
+    readonly bundle: ThreadMoveBundle;
+  }) {
     yield* attempt(() => validateMoveBundle(bundle));
     yield* attempt(() => {
       let bytes = 0;
@@ -715,7 +741,21 @@ const make = Effect.gen(function* () {
       );
     return receipt;
   });
-  return ThreadMoveService.of({ export: exportThread, receive, finish });
+  const receiveArchive = ({ projectId, archive }: ThreadMoveImportInput) =>
+    Effect.tryPromise({
+      try: () => unpackMoveBundle(archive),
+      catch: (error) =>
+        isMoveError(error)
+          ? error
+          : new ThreadMoveError({ message: "Could not read the transfer." }),
+    }).pipe(Effect.flatMap((bundle) => receive({ projectId, bundle })));
+  return ThreadMoveService.of({
+    export: exportThread,
+    exportArchive,
+    receive,
+    receiveArchive,
+    finish,
+  });
 });
 
 export const layer = Layer.effect(ThreadMoveService, make);

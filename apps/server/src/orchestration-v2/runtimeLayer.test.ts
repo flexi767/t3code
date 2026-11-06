@@ -2729,6 +2729,19 @@ it.effect(
       runGit(projectRoot, ["init", "--bare", remote]);
       runGit(projectRoot, ["remote", "add", "origin", remote]);
       yield* fs.writeFileString(NodePath.join(projectRoot, "move-work.txt"), "work to carry");
+      const attachmentFile = `${config.attachmentsDir}/${attachmentId}.pdf`;
+      yield* fs.rename(attachmentFile, `${attachmentFile}.hidden`);
+      const unexportable = yield* source
+        .export({
+          threadId: sourceId,
+          transferId: "f1616321-3e1c-41fb-8357-d1d3dc4eae42",
+          prepareRepository: true,
+        })
+        .pipe(Effect.flip);
+      assert.include(unexportable.message, "missing on the source machine");
+      assert.equal(runGit(projectRoot, ["rev-parse", "HEAD"]).trim(), sourceCommit);
+      assert.include(runGit(projectRoot, ["status", "--porcelain"]), "move-work.txt");
+      yield* fs.rename(`${attachmentFile}.hidden`, attachmentFile);
       rejectPush = true;
       const preparationFailure = yield* source
         .export({

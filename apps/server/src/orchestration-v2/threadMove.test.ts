@@ -1,4 +1,5 @@
-import { assert, it } from "@effect/vitest";
+import * as NodeZlib from "node:zlib";
+import { assert, expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
   MessageId,
@@ -25,6 +26,8 @@ import {
   movedId,
   moveDigest,
   moveProjectionEvents,
+  packMoveBundle,
+  unpackMoveBundle,
   validateMoveBundle,
   movedToolOutput,
 } from "./threadMove.ts";
@@ -177,6 +180,26 @@ function bundle(): ThreadMoveBundle {
   };
 }
 
+it("archives bundles compactly and refuses oversized or damaged transfers", async () => {
+  const input = bundle();
+  const archive = await packMoveBundle(input);
+  const unpacked = await unpackMoveBundle(archive);
+  assert.equal(moveDigest(unpacked), moveDigest(input));
+  const padded = {
+    ...input,
+    assets: [{ path: "padding.bin", data: "a".repeat(1024 * 1024) }],
+  };
+  assert.isBelow((await packMoveBundle(padded)).data.length, 64 * 1024);
+  await expect(packMoveBundle(input, 8)).rejects.toThrow("compressed move limit");
+  await expect(unpackMoveBundle({ encoding: "gzip+base64", data: "bm90IGd6aXA=" })).rejects.toThrow(
+    "damaged or too large",
+  );
+  const bomb = NodeZlib.gzipSync(Buffer.alloc(257 * 1024 * 1024));
+  await expect(
+    unpackMoveBundle({ encoding: "gzip+base64", data: bomb.toString("base64") }),
+  ).rejects.toThrow("damaged or too large");
+});
+
 it("exports child provider conversations only in their owning snapshot", () => {
   const childId = ThreadId.make("thread:child");
   const provider = (appThreadId: ThreadId | null, suffix: string) => ({
@@ -202,12 +225,14 @@ it("exports child provider conversations only in their owning snapshot", () => {
   const parentSnapshot = localMoveProjection({
     ...projection(),
     providerThreads: [own, child, native],
+    visibleTurnItems: [{} as never],
   });
   const childSnapshot = localMoveProjection({
     ...projection(childId),
     providerThreads: [child],
   });
   assert.deepEqual(parentSnapshot.providerThreads, [own, native]);
+  assert.deepEqual(parentSnapshot.visibleTurnItems, []);
   assert.deepEqual(childSnapshot.providerThreads, [child]);
   const input = bundle();
   validateMoveBundle({

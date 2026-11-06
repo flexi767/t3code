@@ -3,7 +3,7 @@ import {
   type ThreadId,
   type EnvironmentId,
   type ProjectId,
-  type ThreadMoveBundle,
+  type ThreadMoveArchive,
   type OrchestrationGetTurnDiffResult,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -43,7 +43,7 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
   } = {},
 ) {
   // Keep a bounded snapshot for retrying a lost import response without re-exporting changed history.
-  const pendingMoves = new Map<string, ThreadMoveBundle>();
+  const pendingMoves = new Map<string, ThreadMoveArchive>();
   const onCheckpointDiffAnswer =
     options.onCheckpointDiffAnswer === undefined
       ? {}
@@ -63,7 +63,7 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
         const registry = yield* EnvironmentRegistry;
         input.onProgress?.("preparing");
         const key = `${input.sourceEnvironmentId}:${input.threadId}:${input.destinationEnvironmentId}:${input.destinationProjectId}:${input.transferId}`;
-        const bundle =
+        const archive =
           pendingMoves.get(key) ??
           (yield* registry.run(
             input.sourceEnvironmentId,
@@ -73,12 +73,12 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
               prepareRepository: true,
             }),
           ));
-        pendingMoves.set(key, bundle);
+        pendingMoves.set(key, archive);
         while (pendingMoves.size > 2) pendingMoves.delete(pendingMoves.keys().next().value!);
         input.onProgress?.("copying");
         const receipt = yield* registry.run(
           input.destinationEnvironmentId,
-          importThreadMove({ projectId: input.destinationProjectId, bundle }),
+          importThreadMove({ projectId: input.destinationProjectId, archive }),
         );
         input.onProgress?.("finishing");
         // A lost source connection cannot undo a successfully committed destination copy.

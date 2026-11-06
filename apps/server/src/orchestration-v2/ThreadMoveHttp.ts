@@ -29,14 +29,14 @@ export const layer = HttpApiBuilder.group(EnvironmentHttpApi, "threadMove", (han
               ? requireEnvironmentScope(AuthSourceControlWriteScope)
               : Effect.void,
           ),
-          Effect.andThen(moves.export(payload)),
+          Effect.andThen(moves.exportArchive(payload)),
         ),
       )
       .handle("threadMoveImport", ({ payload }) =>
         requireEnvironmentScope(AuthOrchestrationOperateScope).pipe(
           Effect.andThen(requireEnvironmentScope(AuthFilesystemWriteScope)),
           Effect.andThen(requireEnvironmentScope(AuthSourceControlWriteScope)),
-          Effect.andThen(moves.receive(payload)),
+          Effect.andThen(moves.receiveArchive(payload)),
         ),
       )
       .handle("threadMoveFinish", ({ payload }) =>

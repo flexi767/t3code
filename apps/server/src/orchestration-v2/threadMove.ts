@@ -1,10 +1,15 @@
 // @effect-diagnostics nodeBuiltinImport:off - deterministic transfer ids and content hashes use node:crypto.
 import * as NodeCrypto from "node:crypto";
+import * as NodeUtil from "node:util";
+import * as NodeZlib from "node:zlib";
 import {
   EventId,
+  NonNegativeInt,
   type ProjectId,
-  type ThreadMoveBundle,
+  type ThreadMoveArchive,
+  ThreadMoveBundle,
   ThreadMoveError,
+  TrimmedNonEmptyString,
   OrchestrationV2DomainEvent,
   OrchestrationV2ThreadProjectionJson,
   type OrchestrationV2ThreadProjection,
@@ -56,7 +61,24 @@ export function movedToolOutput(item: ToolItem, assets: ReadonlyMap<string, stri
 }
 
 export const THREAD_MOVE_MAX_BYTES = 32 * 1024 * 1024;
-const MAX_BUNDLE_BYTES = 63 * 1024 * 1024;
+// Fits the 64 MiB thread-move request limit once wrapped in the import payload.
+const MAX_ARCHIVE_BYTES = 63 * 1024 * 1024;
+const MAX_UNPACKED_BYTES = 256 * 1024 * 1024;
+const gzip = NodeUtil.promisify(NodeZlib.gzip);
+const gunzip = NodeUtil.promisify(NodeZlib.gunzip);
+const MoveBundleJson = Schema.Struct({
+  ...ThreadMoveBundle.fields,
+  projections: Schema.Array(
+    Schema.Struct({
+      projection: OrchestrationV2ThreadProjectionJson,
+      sequence: NonNegativeInt,
+      move: Schema.Boolean,
+      commitSha: Schema.NullOr(TrimmedNonEmptyString),
+    }),
+  ),
+});
+const encodeMoveBundle = Schema.encodeSync(MoveBundleJson);
+const decodeMoveBundle = Schema.decodeUnknownSync(MoveBundleJson);
 const encodeProjection = Schema.encodeSync(OrchestrationV2ThreadProjectionJson);
 const decodeProjection = Schema.decodeUnknownSync(OrchestrationV2ThreadProjectionJson);
 const decodeEvent = Schema.decodeUnknownSync(OrchestrationV2DomainEvent);
@@ -66,6 +88,8 @@ export function localMoveProjection(
 ): OrchestrationV2ThreadProjection {
   return {
     ...projection,
+    // A full copy of turnItems that the destination rebuilds, and most of a thread's size.
+    visibleTurnItems: [],
     // Parent projections also expose app-owned children's provider threads; their own snapshots carry them.
     providerThreads: projection.providerThreads.filter(
       (row) => row.appThreadId === null || row.appThreadId === projection.thread.id,
@@ -98,17 +122,30 @@ export function validateMoveBundle(bundle: ThreadMoveBundle): void {
   ) {
     throw new ThreadMoveError({ message: "The source thread is missing from the transfer." });
   }
-  const encoded = JSON.stringify({
-    ...bundle,
-    projections: bundle.projections.map((entry) => ({
-      ...entry,
-      projection: encodeProjection(entry.projection),
-    })),
-  });
-  if (Buffer.byteLength(encoded) > MAX_BUNDLE_BYTES)
+}
+
+export async function packMoveBundle(
+  bundle: ThreadMoveBundle,
+  maxBytes = MAX_ARCHIVE_BYTES,
+): Promise<ThreadMoveArchive> {
+  const json = JSON.stringify(encodeMoveBundle(bundle));
+  const data = (await gzip(json)).toString("base64");
+  if (data.length > maxBytes || Buffer.byteLength(json) > MAX_UNPACKED_BYTES)
     throw new ThreadMoveError({
-      message: "Saved history and attachments exceed the 63 MB move limit.",
+      message: "Saved history and attachments exceed the 63 MB compressed move limit.",
     });
+  return { encoding: "gzip+base64", data };
+}
+
+export async function unpackMoveBundle(archive: ThreadMoveArchive): Promise<ThreadMoveBundle> {
+  try {
+    const json = await gunzip(Buffer.from(archive.data, "base64"), {
+      maxOutputLength: MAX_UNPACKED_BYTES,
+    });
+    return decodeMoveBundle(JSON.parse(json.toString("utf8")));
+  } catch {
+    throw new ThreadMoveError({ message: "The transfer is damaged or too large to import." });
+  }
 }
 
 export function movedId(transferId: string, id: string): string {
