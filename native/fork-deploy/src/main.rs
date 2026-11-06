@@ -395,6 +395,14 @@ fn verify(ver: &str) -> Result<()> {
         thread::sleep(Duration::from_secs(2));
     }
 }
+// An unreachable M3 can be left behind; its next rollout must use a new version.
+fn remote_hosts() -> &'static [&'static str] {
+    if env::var_os("T3CODE_FLEET_SKIP_M3").is_some() {
+        &["j"]
+    } else {
+        &["m3", "j"]
+    }
+}
 fn route(host: &str) -> String {
     if host == "m3" {
         env::var("T3CODE_FLEET_M3_SSH_HOST").unwrap_or_else(|_| host.into())
@@ -468,20 +476,22 @@ fn prepare_helpers(ver: &str) -> Result<String> {
             &format!("j:{directory}/"),
         ],
     )?;
-    ssh(
-        "m3",
-        &format!(
-            "rsync -azc --exclude target {} /tmp/",
-            quote(&format!("j:{directory}"))
-        ),
-    )?;
+    if remote_hosts().contains(&"m3") {
+        ssh(
+            "m3",
+            &format!(
+                "rsync -azc --exclude target {} /tmp/",
+                quote(&format!("j:{directory}"))
+            ),
+        )?;
+    }
     let helper = format!("{directory}/target/release/t3-fork-deploy");
     // Select an already installed toolchain on hosts whose rustup default is unset.
     let compile = format!(
         "set -e; for tc in \"$HOME\"/.rustup/toolchains/*; do if [ -x \"$tc/bin/cargo\" ]; then export PATH=\"$tc/bin:$PATH\"; break; fi; done; cargo build --locked --release --manifest-path {}",
         quote(&format!("{directory}/Cargo.toml"))
     );
-    for host in ["j", "m3"] {
+    for host in remote_hosts() {
         println!("Compiling deployment helper on {host}");
         println!("{}", ssh(host, &compile)?);
     }
@@ -491,6 +501,9 @@ fn distribute(ver: &str, builds: &Path, stage_only: bool) -> Result<()> {
     let helper = prepare_helpers(ver)?;
     let transport = "ssh -o ConnectTimeout=8 -o ServerAliveInterval=10 -o ServerAliveCountMax=3";
     for platform in ["linux-x64", "darwin-arm64"] {
+        if platform == "darwin-arm64" && !remote_hosts().contains(&"m3") {
+            continue;
+        }
         let archive = builds.join(format!("fleet-{platform}.tar"));
         let destination = format!("/tmp/t3-fleet-{ver}-{platform}.tar");
         remote(
@@ -558,7 +571,7 @@ fn distribute(ver: &str, builds: &Path, stage_only: bool) -> Result<()> {
     }
     stage(ver, &builds.join("fleet-darwin-arm64.tar"))?;
     if stage_only {
-        println!("Fleet {ver} staged on M5, M3 and J; no running server or desktop was changed.");
+        println!("Fleet {ver} staged; no running server or desktop was changed.");
         return Ok(());
     }
     activate_fleet(ver, builds, &helper)
@@ -571,11 +584,11 @@ fn activate_fleet(ver: &str, builds: &Path, helper: &str) -> Result<()> {
     }
     let app = builds.join("desktop/T3 Code (Beta).app");
     run("codesign", &["--verify", "--deep", "--strict", s(&app)])?;
-    for host in ["m3", "j"] {
+    for host in remote_hosts() {
         remote(host, helper, &["host-idle"])?;
     }
     let saved = backup(ver)?;
-    for host in ["m3", "j"] {
+    for host in remote_hosts() {
         remote(host, helper, &["host-activate", "--version", ver])?;
         remote(host, helper, &["host-verify", "--version", ver])?;
         let runner = output(
@@ -631,7 +644,7 @@ fn activate_fleet(ver: &str, builds: &Path, helper: &str) -> Result<()> {
     fs::write(
         builds.join("fleet-complete.json"),
         serde_json::to_vec_pretty(
-            &json!({"version":ver,"hosts":["m5","m3","j"],"source":output("git", &["rev-parse","HEAD"])?}),
+            &json!({"version":ver,"hosts":std::iter::once(&"m5").chain(remote_hosts()).collect::<Vec<_>>(),"source":output("git", &["rev-parse","HEAD"])?}),
         )?,
     )?;
     println!("Fleet complete: M5, M3 and J run {ver}");
@@ -686,10 +699,12 @@ fn fleet(ver: &str, upstream: &str, stage_only: bool) -> Result<()> {
     if !stage_only {
         idle()?;
     }
-    for host in ["m3", "j"] {
+    for host in remote_hosts() {
         ssh(host, "true")?;
     }
-    ssh("m3", "ssh -o BatchMode=yes -o ConnectTimeout=8 j true")?;
+    if remote_hosts().contains(&"m3") {
+        ssh("m3", "ssh -o BatchMode=yes -o ConnectTimeout=8 j true")?;
+    }
     let builds = home()?.join(".t3/builds").join(ver);
     fs::create_dir(&builds)?;
     let base_version = upstream.strip_prefix('v').unwrap_or(upstream);
