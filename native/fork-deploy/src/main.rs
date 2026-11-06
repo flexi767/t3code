@@ -203,13 +203,31 @@ fn read_idle_count(mut read: impl FnMut() -> Result<String>) -> Result<String> {
     }
     unreachable!()
 }
+// A read-only connection cannot create the -shm a WAL database needs, so it fails with
+// error 14 once the app has closed cleanly. With no sidecars the main file is complete.
+fn sqlite_read_args(db: &Path) -> [String; 2] {
+    let path = db.display().to_string();
+    if ["-wal", "-shm", "-journal"]
+        .iter()
+        .any(|suffix| Path::new(&format!("{path}{suffix}")).exists())
+    {
+        ["-readonly".into(), path]
+    } else {
+        let uri = path
+            .replace('%', "%25")
+            .replace('?', "%3f")
+            .replace('#', "%23");
+        ["-batch".into(), format!("file:{uri}?immutable=1")]
+    }
+}
 fn idle_at(db: &Path) -> Result<()> {
     if db.exists() {
+        let open = sqlite_read_args(db);
         let count = read_idle_count(|| output(
             "sqlite3",
             &[
-                "-readonly",
-                s(db),
+                open[0].as_str(),
+                open[1].as_str(),
                 "SELECT count(*) FROM orchestration_v2_projection_runs WHERE status IN ('queued','preparing','starting','running','waiting')",
             ],
         )).map_err(|error| format!("Cannot check active turns in {}: {error}", db.display()))?;
@@ -224,19 +242,47 @@ fn idle_at(db: &Path) -> Result<()> {
 fn backup(ver: &str) -> Result<PathBuf> {
     idle()?;
     let dest = home()?.join(".t3/backups/fleet").join(ver);
-    fs::create_dir_all(&dest)?;
-    let db = home()?.join(".t3/userdata/statev2.sqlite");
-    if db.exists() {
+    backup_at(&home()?.join(".t3/userdata/statev2.sqlite"), &dest)?;
+    Ok(dest)
+}
+fn backup_at(db: &Path, dest: &Path) -> Result<()> {
+    fs::create_dir_all(dest)?;
+    let saved = dest.join("statev2.sqlite");
+    // A retry runs after migrations, so only the first snapshot can restore the old version.
+    if db.exists() && !saved.exists() {
+        let partial = dest.join("statev2.sqlite.partial");
+        let open = sqlite_read_args(db);
         run(
             "sqlite3",
             &[
-                "-readonly",
-                s(&db),
-                &format!(".backup {}", quote(s(&dest.join("statev2.sqlite")))),
+                open[0].as_str(),
+                open[1].as_str(),
+                &format!(".backup {}", quote(s(&partial))),
             ],
         )?;
+        fs::rename(partial, saved)?;
     }
-    Ok(dest)
+    Ok(())
+}
+fn desktop_swap_needed(installed: Option<&str>, ver: &str, backup_exists: bool) -> Result<bool> {
+    if installed == Some(ver) {
+        return Ok(false);
+    }
+    if backup_exists {
+        return Err("A previous desktop app is already backed up for this version; inspect it before retrying".into());
+    }
+    Ok(true)
+}
+fn installed_version(app: &Path) -> Option<String> {
+    output(
+        "/usr/libexec/PlistBuddy",
+        &[
+            "-c",
+            "Print CFBundleShortVersionString",
+            s(&app.join("Contents/Info.plist")),
+        ],
+    )
+    .ok()
 }
 fn stage(ver: &str, archive: &Path) -> Result<()> {
     let target = runtime(ver)?;
@@ -561,17 +607,24 @@ fn activate_fleet(ver: &str, builds: &Path, helper: &str) -> Result<()> {
         }
     }
     idle()?;
-    run(
-        "osascript",
-        &["-e", "tell application \"T3 Code (Beta)\" to quit"],
-    )?;
-    thread::sleep(Duration::from_secs(2));
     let installed = Path::new("/Applications/T3 Code (Beta).app");
-    fs::rename(installed, saved.join(installed.file_name().unwrap()))?;
-    run(
-        "ditto",
-        &[s(&builds.join("desktop/T3 Code (Beta).app")), s(installed)],
-    )?;
+    let previous = saved.join(installed.file_name().unwrap());
+    if desktop_swap_needed(
+        installed_version(installed).as_deref(),
+        ver,
+        previous.exists(),
+    )? {
+        run(
+            "osascript",
+            &["-e", "tell application \"T3 Code (Beta)\" to quit"],
+        )?;
+        thread::sleep(Duration::from_secs(2));
+        fs::rename(installed, previous)?;
+        run(
+            "ditto",
+            &[s(&builds.join("desktop/T3 Code (Beta).app")), s(installed)],
+        )?;
+    }
     link_cli(ver)?;
     run("open", &[s(installed)])?;
     verify(ver)?;
@@ -1046,11 +1099,53 @@ mod tests {
         assert_eq!(attempts, 10);
     }
     #[test]
+    fn repeat_backup_keeps_the_first_snapshot() {
+        let dir = temporary("backup");
+        let db = dir.join("state.sqlite");
+        run(
+            "sqlite3",
+            &[
+                s(&db),
+                "CREATE TABLE t(v TEXT); INSERT INTO t VALUES ('before');",
+            ],
+        )
+        .unwrap();
+        backup_at(&db, &dir.join("saved")).unwrap();
+        run("sqlite3", &[s(&db), "UPDATE t SET v = 'after';"]).unwrap();
+        backup_at(&db, &dir.join("saved")).unwrap();
+        let saved = dir.join("saved/statev2.sqlite");
+        assert_eq!(
+            output("sqlite3", &["-readonly", s(&saved), "SELECT v FROM t"]).unwrap(),
+            "before"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn desktop_swap_never_quits_an_app_it_cannot_replace() {
+        let ver = "1.2.3";
+        assert!(!desktop_swap_needed(Some(ver), ver, true).unwrap());
+        assert!(!desktop_swap_needed(Some(ver), ver, false).unwrap());
+        assert!(desktop_swap_needed(Some("1.2.2"), ver, false).unwrap());
+        assert!(desktop_swap_needed(Some("1.2.2"), ver, true).is_err());
+        assert!(desktop_swap_needed(None, ver, true).is_err());
+    }
+    #[test]
     fn idle_guard_reads_database_and_refuses_active_turns() {
         let dir = temporary("idle");
         let db = dir.join("state.sqlite");
         run("sqlite3", &[s(&db), "CREATE TABLE orchestration_v2_projection_runs(status TEXT); INSERT INTO orchestration_v2_projection_runs VALUES ('completed');"]).unwrap();
         idle_at(&db).unwrap();
+        let closed = dir.join("closed-wal.sqlite");
+        run("sqlite3", &[s(&closed), "PRAGMA journal_mode=WAL; CREATE TABLE orchestration_v2_projection_runs(status TEXT); INSERT INTO orchestration_v2_projection_runs VALUES ('running');"]).unwrap();
+        for suffix in ["-wal", "-shm"] {
+            let _ = fs::remove_file(format!("{}{suffix}", closed.display()));
+        }
+        assert!(
+            idle_at(&closed)
+                .unwrap_err()
+                .to_string()
+                .contains("1 active turns")
+        );
         run(
             "sqlite3",
             &[

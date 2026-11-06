@@ -38,6 +38,8 @@ To prepare a repair while agents are working, use `fleet-stage` with the same
 version/upstream flags. It builds and stages all three hosts without activation.
 When all hosts are idle, run `scripts/fork-deploy fleet-activate --version VERSION`
 from a terminal outside T3. This activates the staged fleet and restarts the app.
+Never wrap activation in `launchctl submit`: submitted jobs are KeepAlive, so the
+activator reruns every 10 seconds, even after it succeeds, and each rerun can quit the app.
 Archive transfers retain partial data for resumption; SSH keepalive checks stop
 unresponsive connections instead of leaving a transfer hanging indefinitely.
 M5 uploads both runtime packages to J. M3 pulls its Mac package and the staging
