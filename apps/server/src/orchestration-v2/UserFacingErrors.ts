@@ -137,6 +137,10 @@ function collectErrorMessages(value: unknown, seen: Set<unknown>): ReadonlyArray
   return message === undefined ? nested : [message, ...nested];
 }
 
+export function threadLaunchFailureMessage(cause: unknown): string {
+  return userFacingDispatchErrorMessage(cause) ?? "Failed to launch thread";
+}
+
 export function userFacingDispatchErrorMessage(cause: unknown): string | undefined {
   const messages = collectErrorMessages(cause, new Set()).filter(
     (message, index, allMessages) =>

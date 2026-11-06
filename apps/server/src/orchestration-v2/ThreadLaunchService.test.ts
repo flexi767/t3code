@@ -1,4 +1,6 @@
 import * as DocumentText from "../provider/DocumentText.ts";
+import * as TurnAdmission from "./TurnAdmission.ts";
+import { userFacingDispatchErrorMessage } from "./UserFacingErrors.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
@@ -2477,3 +2479,78 @@ it.effect("replays an accepted send after the project disables the instance", ()
     }
   }).pipe(Effect.provide(Layer.mergeAll(harness.layer, layerFiles)));
 });
+
+const admissionHarness = (isHeld: Effect.Effect<boolean>) => {
+  const harness = makeHarness();
+  return harness.layer.pipe(Layer.provide(Layer.succeed(TurnAdmission.TurnAdmission, { isHeld })));
+};
+const firstSendState = (threadId: ThreadId, command: string) =>
+  Effect.gen(function* () {
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const outbox = yield* EffectOutbox.EffectOutboxV2;
+    const projection = yield* threads.getThreadProjection(threadId);
+    return {
+      messages: projection.messages.map((message) => message.text),
+      runs: projection.runs.length,
+      turnStarts: (yield* outbox.listByCommandId(CommandId.make(`${command}:release`))).filter(
+        (effect) => effect.request.type === "provider-turn.start",
+      ).length,
+    };
+  });
+
+it.effect("a first send during a hold leaves only the draft, whichever command retries it", () =>
+  Effect.gen(function* () {
+    let held = true;
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      for (const [thread, firstCommand, retryCommand] of [
+        ["thread:held:same-id", "command:held:same-id", "command:held:same-id"],
+        ["thread:held:new-id", "command:held:first-id", "command:held:client-retry-id"],
+      ] as const) {
+        const threadId = ThreadId.make(thread);
+        held = true;
+        const refused = yield* launches
+          .launch(launchInput({ command: firstCommand, thread, message: "draft text" }))
+          .pipe(Effect.flip);
+        assert.include(userFacingDispatchErrorMessage(refused), "new turns are paused");
+        assert.isNull(yield* threads.getThreadShell(threadId));
+
+        held = false;
+        const retry = launchInput({ command: retryCommand, thread, message: "draft text" });
+        assert.isFalse((yield* launches.launch(retry)).resumed);
+        yield* preparationSettled(threadId);
+        const expected = { messages: ["draft text"], runs: 1, turnStarts: 1 };
+        assert.deepEqual(yield* firstSendState(threadId, retryCommand), expected);
+
+        // A replay of an accepted send is not new work, so it passes a later hold unchanged.
+        held = true;
+        assert.isTrue((yield* launches.launch(retry)).resumed);
+        assert.deepEqual(yield* firstSendState(threadId, retryCommand), expected);
+      }
+    }).pipe(Effect.provide(admissionHarness(Effect.sync(() => held))));
+  }),
+);
+
+it.effect("a hold that starts during a first send leaves a thread the same command recovers", () =>
+  Effect.gen(function* () {
+    // The launch checks once before creating the thread and the commit checks again.
+    const answers = [false, true];
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const threadId = ThreadId.make("thread:held:race");
+      const command = "command:held:race";
+      const input = launchInput({ command, thread: threadId, message: "draft text" });
+      yield* launches.launch(input).pipe(Effect.flip);
+      assert.lengthOf((yield* threads.getThreadProjection(threadId)).messages, 0);
+      yield* launches.launch(input);
+      yield* preparationSettled(threadId);
+      assert.deepEqual(yield* firstSendState(threadId, command), {
+        messages: ["draft text"],
+        runs: 1,
+        turnStarts: 1,
+      });
+    }).pipe(Effect.provide(admissionHarness(Effect.sync(() => answers.shift() ?? false))));
+  }),
+);

@@ -52,6 +52,7 @@ import type * as Orchestrator from "./Orchestrator.ts";
 import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
 import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
 import { DispatchModeLimit } from "./DispatchModeLimit.ts";
+import * as TurnAdmission from "./TurnAdmission.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
 export type ThreadLaunchWorkspaceStrategy =
@@ -212,6 +213,7 @@ const make = Effect.gen(function* () {
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const textGeneration = yield* TextGeneration.TextGeneration;
   const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
+  const turnAdmission = yield* TurnAdmission.TurnAdmission;
   const ids = yield* IdAllocator.IdAllocatorV2;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
@@ -867,6 +869,25 @@ const make = Effect.gen(function* () {
         commandId: input.commandId,
         instanceId: input.modelSelection.instanceId,
       });
+      // Refuse before creating the thread, so a held first send leaves only the client's draft.
+      // A send already accepted is a replay, not new work.
+      if (
+        input.initialMessage !== undefined &&
+        TurnAdmission.firstMessageStartsNewWork({
+          creationSource: input.creationSource,
+          senderThreadId: input.initialMessage.senderThreadId,
+        }) &&
+        (yield* turnAdmission.isHeld) &&
+        Option.isNone(
+          yield* readReceipt(input, CommandId.make(`${input.commandId}:initial-message`)),
+        )
+      ) {
+        return yield* mapError(
+          input,
+          "dispatch-message",
+          input.threadId,
+        )(new TurnAdmission.TurnAdmissionHeldError());
+      }
       return yield* Effect.gen(function* () {
         // Recover ids from accepted launch receipts before allocating; retries have no client id and new ids collide with receipts.
         const reusableLaunchReceipt =

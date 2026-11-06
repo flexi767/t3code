@@ -72,7 +72,8 @@ writing the hold. A commit that passed the check therefore finishes before the h
 counts active runs, and every later commit sees the hold. Checking outside the transaction
 would let a turn start after the count reported idle.
 
-A held command writes no rejection receipt, because scheduled and limit-recovery commands
+A launch checks the hold before creating its thread, so a refused first send leaves only
+the client's draft and any later retry can create the thread. A held command writes no rejection receipt, because scheduled and limit-recovery commands
 reuse stable IDs and must work once the hold ends. Work an admitted turn depends on stays
 open, since refusing it would fail that turn. An expired or unreadable hold counts as open
 so that a dead rollout cannot stop turns indefinitely.

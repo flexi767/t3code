@@ -1,7 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off - fork-deploy shares this hold with the server as a file.
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
-import type { OrchestrationV2DomainEvent, OrchestrationV2ServerCommand } from "@t3tools/contracts";
+import type {
+  OrchestrationV2CreationSource,
+  OrchestrationV2DomainEvent,
+  OrchestrationV2ServerCommand,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -54,6 +58,14 @@ export function startsNewWork(
     command.restartContinuationOfRunId === undefined &&
     !command.commandId.startsWith(STEER_FOLLOW_UP_COMMAND_PREFIX)
   );
+}
+
+/** The same exemptions, for a launch that has not built its first command yet. */
+export function firstMessageStartsNewWork(input: {
+  readonly creationSource: OrchestrationV2CreationSource;
+  readonly senderThreadId?: unknown;
+}): boolean {
+  return input.creationSource !== "provider" && input.senderThreadId === undefined;
 }
 
 export const layer = Layer.effect(

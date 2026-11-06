@@ -8,9 +8,18 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { SqlError, classifySqliteError } from "effect/sql/SqlError";
 
 import { toPersistenceSqlError } from "../persistence/Errors.ts";
-import { userFacingDispatchErrorMessage } from "./UserFacingErrors.ts";
+import { TurnAdmissionHeldError } from "./TurnAdmission.ts";
+import { threadLaunchFailureMessage, userFacingDispatchErrorMessage } from "./UserFacingErrors.ts";
 
 describe("userFacingDispatchErrorMessage", () => {
+  it("shows why a first send was paused instead of a generic launch failure", () => {
+    assert.include(
+      threadLaunchFailureMessage({ cause: new TurnAdmissionHeldError() }),
+      "new turns are paused",
+    );
+    assert.equal(threadLaunchFailureMessage(undefined), "Failed to launch thread");
+  });
+
   it.effect("explains a real database open failure through dispatch and persistence wrappers", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
