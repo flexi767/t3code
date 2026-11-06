@@ -4,9 +4,11 @@ For web UI changes on M5, use `scripts/fork-deploy ui`. It builds only
 the web client, retains old chunks, and atomically replaces the HTML entry.
 Reload the window to use it; running turns, remote hosts, CLI versions and
 server processes are unaffected. Changes to contracts, shared runtime or
-dependencies require the full rollout below. The signed desktop shell needs
-the UI-loader bootstrap once before this command works. UI revisions live in
-`~/.t3/ui/<desktop-version>/revision.json`, independently of the server version.
+dependencies, or the desktop shell, require the full rollout below. The signed
+desktop shell needs the UI-loader bootstrap once before this command works. UI
+revisions live in `~/.t3/ui/<desktop-version>/revision.json`, independently of the
+server version. Previous entry pages are kept in `~/.t3/ui/<desktop-version>/backups`.
+Delete `~/.t3/ui/<desktop-version>/client` and reload to return to the bundled UI.
 
 M5 runs the signed desktop app. M3 and J run managed server services. All three
 must have the desktop's exact CLI version installed: SSH otherwise tries to
@@ -20,7 +22,7 @@ scripts/fork-deploy fleet --version 0.1.8-preview.20261104.1 --upstream-tag v0.1
 
 Use a new version every time. The script requires both SSH hosts to be reachable,
 and can use an existing direct M3 SSH alias by setting `T3CODE_FLEET_M3_SSH_HOST=m3-lan`.
-It requires no active T3 turns when switching. It builds serially, verifies upstream
+It builds serially, verifies upstream
 archive checksums and dependency compatibility, preserves the configured local
 Apple signing identity, stages complete runtimes, and writes the SSH installation
 marker only after each binary reports the expected version. Remote servers switch
@@ -29,33 +31,66 @@ receipt is written under `~/.t3/builds/<version>/fleet-complete.json`.
 
 Full builds require `T3CODE_RELAY_URL`, `T3CODE_CLERK_PUBLISHABLE_KEY` and
 `T3CODE_CLERK_CLI_OAUTH_CLIENT_ID`. The helper reads these from the environment,
-falling back to `~/.t3/fork-connect-public.json` with the same three keys.
+falling back to `~/.t3/fork-connect-public.json` with the same keys, where
+`T3CODE_CLERK_JWT_TEMPLATE` is optional but web clients lose T3 Connect without it.
 That file contains public build configuration, not login credentials. Missing
 values fail before building: a signed app without them can run locally while
 silently leaving every phone unable to connect after a restart.
 
-To update while agents are working, add `--when-idle-timeout SECONDS` (up to four hours)
-to `fleet` or `fleet-activate`. It stages if needed, pauses new turns on every host, waits
-for running turns, and switches only when all hosts are idle. Running turns are never
-stopped, and their child tasks, wakes and steers still work. New sends are refused with a
-message saying so, and due scheduled tasks wait.
+## Activating around running agents
 
-A timeout, Ctrl+C, or `scripts/fork-deploy fleet-activate-cancel` from another terminal
-allows turns again without switching anything. If the rollout itself dies, each host's
-hold expires by itself up to 15 minutes after the timeout. Retrying with the same version
-is safe: an installed fleet is left alone. To retry after a failed `fleet`, use
-`fleet-activate`, since `fleet` needs a new version. A host only enforces the pause once
-it runs a build that has it, so the first rollout to that build still needs an idle check
-at switch time.
+`fleet-stage`, with the same version and upstream flags, builds and stages all
+three hosts without activating. Then choose how to switch, with `fleet-activate
+--version VERSION` or the same flags on `fleet`:
 
-To prepare a repair while agents are working, use `fleet-stage` with the same
-version/upstream flags. It builds and stages all three hosts without activation.
-When all hosts are idle, run `scripts/fork-deploy fleet-activate --version VERSION`
-from a terminal outside T3. This activates the staged fleet and restarts the app.
-If M3 is unreachable, `T3CODE_FLEET_SKIP_M3=1` rolls out to M5 and J only. The desktop
-cannot connect to M3 until a later rollout, with a new version, reaches it.
+| Flags                                 | Behavior                                                                                          |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| none                                  | Refuses unless every host is idle.                                                                |
+| `--when-idle-timeout SECONDS`         | Pauses new turns, waits for idle, then switches. On timeout it allows turns and switches nothing. |
+| `--when-idle-timeout SECONDS --force` | The same, but on timeout it restarts anyway.                                                      |
+| `--force`                             | Restarts now.                                                                                     |
+
+The wait is at most four hours. During it, running turns and their child tasks,
+wakes and steers still work. New sends are refused with a message saying so, and
+due scheduled tasks wait. A timeout, Ctrl+C, or `scripts/fork-deploy
+fleet-activate-cancel` from another terminal allows turns again without switching
+anything. If the rollout itself dies, each host's hold expires by itself up to 15
+minutes after the timeout. A host only enforces the pause once it runs a build that
+has it, so the first rollout to that build still needs an idle check at switch time.
+
+A forced restart relies on **Continue threads after restarts**. It prints the
+interrupted threads and records them in `fleet-complete.json`. Check them: a resumed
+agent may re-run a command that had only partly finished, such as a migration or
+a push. Threads shown as `[waiting]` need you before they continue.
+
+A process inside a T3 turn dies with the restart it requests, and its own turn
+keeps the fleet busy, so activation refuses to run there. Add `--detach` with
+`--when-idle-timeout` or `--force` to run in the background, logging to
+`~/.t3/logs/fleet-VERSION.log`, then end the turn. Only Claude and Codex set the
+variable this check reads; from another provider's turn, always use `--detach`.
 Never wrap activation in `launchctl submit`: submitted jobs are KeepAlive, so the
 activator reruns every 10 seconds, even after it succeeds, and each rerun can quit the app.
+
+If M3 is unreachable, `T3CODE_FLEET_SKIP_M3=1` rolls out to M5 and J only. The desktop
+cannot connect to M3 until a later rollout, with a new version, reaches it.
+
+## Failure and rollback
+
+A server host that doesn't report the new version within five minutes is rolled
+back automatically: its previous service definition, CLI link and database backup
+(the first snapshot, taken after the old server stopped) return, and the old version
+restarts. M5 does the same with its previous app. Other hosts are not rolled back, so
+the error can leave the fleet on mixed versions. Retrying with `fleet-activate` is safe:
+an installed fleet is left alone and a host already on the version is only verified.
+`fleet` itself needs a new version.
+
+These are the deploy tool's rollbacks. M3 and J run `t3 serve`
+directly, without the launcher described in
+[server updates](../internals/server-updates.md), so its trial boot and rollback
+do not apply here.
+
+## Transfers
+
 Archive transfers retain partial data for resumption; SSH keepalive checks stop
 unresponsive connections instead of leaving a transfer hanging indefinitely.
 M5 uploads both runtime packages to J. M3 pulls its Mac package and the staging
@@ -63,7 +98,8 @@ helper from J using its existing `j` SSH alias. Each final host verifies its
 archive SHA-256 before staging. M5 never sends the large package directly to M3.
 Transfers use compressed, whole-file rsync: delta updates of the cached tar have
 failed verification between these hosts. The complete tar checksum is checked
-before staging on each final host.
+before staging on each final host. Staged archives are deleted from `/tmp`, which
+is RAM-backed on J.
 
 Project folders are off by default because that beta layout disables thread
 dragging. Rebuilds preserve existing Labs choices. Change folder settings in the
@@ -74,8 +110,6 @@ Full fleet updates send the small Rust crate M5 → J → M3 and compile its hos
 commands with each host's already-installed toolchain. No Python runtime is used.
 Focused helper tests: `cargo test --locked --manifest-path native/fork-deploy/Cargo.toml`.
 
-Backups of the database, previous service definitions and M5 app/preferences are
-under `~/.t3/backups/fleet/<version>` on each host. Incomplete staging does not
-switch any host. An activation failure is reported as incomplete; inspect the
-host and its backup before retrying, especially when database migrations ran.
-Never use a public `t3 update` to repair a private fork version.
+Backups of the database, previous service definitions and M5's app are under
+`~/.t3/backups/fleet/<version>` on each host. Incomplete staging does not switch
+any host. Never use a public `t3 update` to repair a private fork version.

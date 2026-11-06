@@ -19,16 +19,6 @@ export const layer = HttpApiBuilder.group(EnvironmentHttpApi, "threadMove", (han
         requireEnvironmentScope(AuthOrchestrationOperateScope).pipe(
           Effect.andThen(requireEnvironmentScope(AuthOrchestrationReadScope)),
           Effect.andThen(requireEnvironmentScope(AuthFilesystemReadScope)),
-          Effect.andThen(
-            payload.prepareRepository
-              ? requireEnvironmentScope(AuthFilesystemWriteScope)
-              : Effect.void,
-          ),
-          Effect.andThen(
-            payload.prepareRepository
-              ? requireEnvironmentScope(AuthSourceControlWriteScope)
-              : Effect.void,
-          ),
           Effect.andThen(moves.exportArchive(payload)),
         ),
       )

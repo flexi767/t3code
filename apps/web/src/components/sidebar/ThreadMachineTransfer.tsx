@@ -1,5 +1,13 @@
 import { useState } from "react";
-import type { EnvironmentMachineKind, ScopedThreadRef } from "@t3tools/contracts";
+import {
+  AuthFilesystemReadScope,
+  AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
+  type EnvironmentMachineKind,
+  type ScopedThreadRef,
+} from "@t3tools/contracts";
+import { useServerConfigs } from "../../state/entities";
+import { readEnvironmentScope } from "../../state/session";
 import { sessionMachineLabel } from "../../lib/sessionLabels";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { openMoveThreadDialog, useThreadMoveTargets } from "../MoveThreadDialog";
@@ -12,7 +20,14 @@ function TransferDestinations({
   threadRef: ScopedThreadRef;
   working: boolean;
 }) {
-  const targets = useThreadMoveTargets(threadRef.environmentId);
+  const candidates = useThreadMoveTargets(threadRef.environmentId);
+  const configs = useServerConfigs();
+  const canMoveFromSource =
+    configs.get(threadRef.environmentId)?.environment.capabilities.threadMove === true &&
+    [AuthOrchestrationReadScope, AuthOrchestrationOperateScope, AuthFilesystemReadScope].every(
+      (scope) => readEnvironmentScope(threadRef.environmentId, scope),
+    );
+  const targets = canMoveFromSource ? candidates : [];
   const devices = [
     ...new Map(
       targets.map(({ environment, machine }) => [

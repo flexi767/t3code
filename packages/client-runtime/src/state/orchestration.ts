@@ -67,19 +67,22 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
           pendingMoves.get(key) ??
           (yield* registry.run(
             input.sourceEnvironmentId,
-            exportThreadMove({
-              threadId: input.threadId,
-              transferId: input.transferId,
-              prepareRepository: true,
-            }),
+            exportThreadMove({ threadId: input.threadId, transferId: input.transferId }),
           ));
         pendingMoves.set(key, archive);
         while (pendingMoves.size > 2) pendingMoves.delete(pendingMoves.keys().next().value!);
         input.onProgress?.("copying");
-        const receipt = yield* registry.run(
-          input.destinationEnvironmentId,
-          importThreadMove({ projectId: input.destinationProjectId, archive }),
-        );
+        const receipt = yield* registry
+          .run(
+            input.destinationEnvironmentId,
+            importThreadMove({ projectId: input.destinationProjectId, archive }),
+          )
+          .pipe(
+            // A refusal such as an unpushed commit is fixed at the source, so retry must re-export.
+            Effect.tapErrorTag("ThreadMoveError", () =>
+              Effect.sync(() => pendingMoves.delete(key)),
+            ),
+          );
         input.onProgress?.("finishing");
         // A lost source connection cannot undo a successfully committed destination copy.
         const finished = yield* registry

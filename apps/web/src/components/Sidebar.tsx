@@ -1182,7 +1182,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   }, [runningSubthreadParentsKey]);
   const isThreadGroupExpanded = (threadKey: string) =>
     sidebarThreadGroupExpanded(threadKey, runningSubthreadParentKeys, threadGroupOverrides);
+  const forgetLastSubagents = (threadKey: string) =>
+    setLastSubagentKeysByParent((current) => {
+      if (!current.has(threadKey)) return current;
+      const next = new Map(current);
+      next.delete(threadKey);
+      return next;
+    });
   const toggleThreadGroup = (threadKey: string) => {
+    forgetLastSubagents(threadKey);
     setThreadGroupOverrides((current) =>
       new Map(current).set(
         threadKey,
@@ -2674,7 +2682,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           await handleMultiSelectContextMenu(position);
           return;
         }
-        const thread = threadByKeyRef.current.get(threadKey);
+        // threadByKey holds top-level rows only; a nested subagent row needs its menu too.
+        const thread =
+          threadByKeyRef.current.get(threadKey) ??
+          [...subthreadsByParent.values()].flat().find((c) => threadShellKey(c) === threadKey);
         if (!thread) return;
         const threadWorkspacePath =
           thread.worktreePath ??
@@ -2766,6 +2777,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         }
         switch (clicked.value) {
           case "hide-subagents":
+            forgetLastSubagents(threadKey);
             setThreadGroupOverrides((current) => new Map(current).set(threadKey, false));
             return;
           case "show-subagents":

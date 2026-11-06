@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 import type { MenuAction } from "@react-native-menu/menu";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
@@ -9,6 +9,7 @@ import {
   AuthOrchestrationReadScope,
   AuthOrchestrationOperateScope,
   AuthSourceControlWriteScope,
+  ThreadMoveError,
 } from "@t3tools/contracts";
 import * as Dialog from "../../components/ui/Dialog";
 import { useProjects } from "../../state/entities";
@@ -17,6 +18,9 @@ import { readEnvironmentScope } from "../../state/session";
 import { orchestrationEnvironment } from "../../state/orchestration";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { uuidv4 } from "../../lib/uuid";
+import * as Schema from "effect/Schema";
+
+const isThreadMoveError = Schema.is(ThreadMoveError);
 
 export function useMoveThreadMachine(thread: EnvironmentThreadShell) {
   const selectDetail = useSelectWorkspaceDetail();
@@ -25,53 +29,72 @@ export function useMoveThreadMachine(thread: EnvironmentThreadShell) {
   const [moving, setMoving] = useState(false);
   const move = useAtomCommand(orchestrationEnvironment.moveThread, { reportFailure: false });
   const source = environments.find((entry) => entry.environmentId === thread.environmentId);
-  const targets = projects.flatMap((project) => {
-    const environment = environments.find((entry) => entry.environmentId === project.environmentId);
-    if (
-      project.environmentId === thread.environmentId ||
-      project.archivedAt != null ||
-      environment?.connection.phase !== "connected" ||
-      environment.serverConfig?.environment.capabilities.threadMove !== true ||
-      ![AuthOrchestrationOperateScope, AuthFilesystemWriteScope, AuthSourceControlWriteScope].every(
-        (scope) => readEnvironmentScope(project.environmentId, scope),
-      )
-    )
-      return [];
-    return [
-      {
-        project,
-        label: `${environment.label} · ${project.title}`,
-        id: `move-machine:${project.environmentId}:${project.id}`,
-      },
-    ];
-  });
+  const targets = useMemo(() => {
+    const sourceProject = projects.find(
+      (project) =>
+        project.environmentId === thread.environmentId && project.id === thread.projectId,
+    );
+    const sourceRepository = sourceProject?.repositoryIdentity?.canonicalKey;
+    const matchesSource = (project: (typeof projects)[number]) =>
+      sourceRepository
+        ? project.repositoryIdentity?.canonicalKey === sourceRepository
+        : project.title === sourceProject?.title;
+    return projects
+      .flatMap((project) => {
+        const environment = environments.find(
+          (entry) => entry.environmentId === project.environmentId,
+        );
+        if (
+          project.environmentId === thread.environmentId ||
+          project.archivedAt != null ||
+          environment?.connection.phase !== "connected" ||
+          environment.serverConfig?.environment.capabilities.threadMove !== true ||
+          ![
+            AuthOrchestrationOperateScope,
+            AuthFilesystemWriteScope,
+            AuthSourceControlWriteScope,
+          ].every((scope) => readEnvironmentScope(project.environmentId, scope))
+        )
+          return [];
+        return [
+          {
+            project,
+            label: `${environment.label} · ${project.title}`,
+            id: `move-machine:${project.environmentId}:${project.id}`,
+          },
+        ];
+      })
+      .sort(
+        // Matches web: a move needs the same repository, so those come first.
+        (left, right) => Number(matchesSource(right.project)) - Number(matchesSource(left.project)),
+      );
+  }, [environments, projects, thread.environmentId, thread.projectId]);
   const supported =
     source?.serverConfig?.environment.capabilities.threadMove === true &&
-    [
-      AuthOrchestrationReadScope,
-      AuthOrchestrationOperateScope,
-      AuthFilesystemReadScope,
-      AuthFilesystemWriteScope,
-      AuthSourceControlWriteScope,
-    ].every((scope) => readEnvironmentScope(thread.environmentId, scope));
-  const items: MenuAction[] = supported
-    ? [
-        {
-          id: "move-machine",
-          title: moving ? "Moving thread…" : "Move to another machine…",
-          image: "arrow.right",
-          attributes: {
-            disabled: moving || thread.runtime?.activeRunId != null || targets.length === 0,
-          },
-          subactions: targets.map((entry) => ({ id: entry.id, title: entry.label })),
-        },
-      ]
-    : [];
+    [AuthOrchestrationReadScope, AuthOrchestrationOperateScope, AuthFilesystemReadScope].every(
+      (scope) => readEnvironmentScope(thread.environmentId, scope),
+    );
+  const running = thread.runtime?.activeRunId != null;
+  const items = useMemo<MenuAction[]>(
+    () =>
+      supported
+        ? [
+            {
+              id: "move-machine",
+              title: moving ? "Moving thread…" : "Move to another machine…",
+              image: "arrow.right",
+              attributes: { disabled: moving || running || targets.length === 0 },
+              subactions: targets.map((entry) => ({ id: entry.id, title: entry.label })),
+            },
+          ]
+        : [],
+    [moving, running, supported, targets],
+  );
   const handle = (event: string): boolean => {
     const target = targets.find((entry) => entry.id === event);
     if (!target) return false;
     if (moving || thread.runtime?.activeRunId != null) return true;
-    const transferId = uuidv4();
+    let transferId = uuidv4();
     const perform = async () => {
       setMoving(true);
       const result = await move({
@@ -84,12 +107,14 @@ export function useMoveThreadMachine(thread: EnvironmentThreadShell) {
       setMoving(false);
       if (result._tag === "Failure") {
         const cause = squashAtomCommandFailure(result);
+        // A refused move re-exports on retry, and its digest can't reuse this id's saved checkouts.
+        if (isThreadMoveError(cause)) transferId = uuidv4();
         Dialog.confirm({
           title: "Move could not finish",
           message:
             cause instanceof Error
               ? cause.message
-              : "The source is kept; any preparation commit remains. Retry to reconcile any saved destination copy.",
+              : "The source is unchanged. Retry to reconcile any saved destination copy.",
           confirmText: "Retry",
           onConfirm: () => {
             void perform();
@@ -114,7 +139,7 @@ export function useMoveThreadMachine(thread: EnvironmentThreadShell) {
     Dialog.confirm({
       title: `Move to ${target.label}?`,
       message:
-        "Move saved history, attachments and subthreads into a matching checkout. Checkout changes are committed and pushed automatically. The original stays recoverable in Archive.",
+        "Move saved history, attachments and subthreads into a matching checkout. Commit and push working changes first. The original stays recoverable in Archive.",
       confirmText: "Move thread",
       onConfirm: () => {
         void perform();

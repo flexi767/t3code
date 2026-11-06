@@ -14,7 +14,6 @@ export const ThreadMoveId = Schema.String.check(
 export const ThreadMoveExportInput = Schema.Struct({
   threadId: ThreadId,
   transferId: ThreadMoveId,
-  prepareRepository: Schema.optional(Schema.Boolean),
 });
 export const ThreadMoveBundle = Schema.Struct({
   version: Schema.Literal(1),

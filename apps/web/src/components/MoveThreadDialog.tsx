@@ -10,6 +10,7 @@ import {
   AuthSourceControlWriteScope,
   type ScopedThreadRef,
   type EnvironmentId,
+  ThreadMoveError,
 } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -19,6 +20,7 @@ import { readEnvironmentScope } from "../state/session";
 import { orchestrationEnvironment } from "../state/orchestration";
 import { useAtomCommand } from "../state/use-atom-command";
 import { randomUUID } from "../lib/utils";
+import * as Schema from "effect/Schema";
 import { buildThreadRouteParams } from "../threadRoutes";
 import {
   Dialog,
@@ -90,6 +92,8 @@ export function useThreadMoveTargets(sourceEnvironmentId: EnvironmentId) {
   });
 }
 
+const isThreadMoveError = Schema.is(ThreadMoveError);
+
 function MoveThreadDialog({
   threadRef,
   destinationEnvironmentId,
@@ -107,20 +111,16 @@ function MoveThreadDialog({
   const [destination, setDestination] = useState<string | null>(null);
   const [phase, setPhase] = useState<"preparing" | "copying" | "finishing" | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [transferId] = useState(randomUUID);
+  const [transferId, setTransferId] = useState(randomUUID);
   const move = useAtomCommand(orchestrationEnvironment.moveThread, { reportFailure: false });
   const target = selectThreadMoveTarget(targets, destination, destinationEnvironmentId, project);
   const canMove =
     thread !== null &&
     thread.runtime?.activeRunId == null &&
     configs.get(threadRef.environmentId)?.environment.capabilities.threadMove === true &&
-    [
-      AuthOrchestrationReadScope,
-      AuthOrchestrationOperateScope,
-      AuthFilesystemReadScope,
-      AuthFilesystemWriteScope,
-      AuthSourceControlWriteScope,
-    ].every((scope) => readEnvironmentScope(threadRef.environmentId, scope));
+    [AuthOrchestrationReadScope, AuthOrchestrationOperateScope, AuthFilesystemReadScope].every(
+      (scope) => readEnvironmentScope(threadRef.environmentId, scope),
+    );
   const close = () => {
     if (phase === null) useRequest.setState({ ref: null });
   };
@@ -139,10 +139,12 @@ function MoveThreadDialog({
     setPhase(null);
     if (result._tag === "Failure") {
       const cause = squashAtomCommandFailure(result);
+      // A refused move re-exports on retry, and its digest can't reuse this id's saved checkouts.
+      if (isThreadMoveError(cause)) setTransferId(randomUUID());
       setError(
         cause instanceof Error
           ? cause.message
-          : "Move failed. The source is kept; any preparation commit remains; retry to reconcile any saved destination copy.",
+          : "Move failed. The source is unchanged; retry to reconcile any saved destination copy.",
       );
       return;
     }
@@ -200,9 +202,8 @@ function MoveThreadDialog({
               </Select>
             </div>
             <p className="text-muted-foreground text-xs">
-              Moves saved history, attachments and subthreads into a matching checkout. Checkout
-              changes are committed and pushed automatically. The source stays recoverable in
-              Archive.
+              Moves saved history, attachments and subthreads into a matching checkout. Commit and
+              push working changes first. The source stays recoverable in Archive.
             </p>
             {!canMove ? (
               <p className="text-muted-foreground text-xs">
@@ -212,7 +213,7 @@ function MoveThreadDialog({
             {phase !== null ? (
               <p role="status" className="text-muted-foreground text-xs">
                 {phase === "preparing"
-                  ? "Committing, pushing and preparing history…"
+                  ? "Preparing history…"
                   : phase === "copying"
                     ? "Copying to destination…"
                     : "Confirming move…"}

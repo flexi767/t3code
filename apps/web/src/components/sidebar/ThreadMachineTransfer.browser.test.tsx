@@ -14,6 +14,12 @@ vi.mock("../MoveThreadDialog", () => ({
   ],
 }));
 
+vi.mock("../../state/entities", () => ({
+  useServerConfigs: () =>
+    new Map([["m5", { environment: { capabilities: { threadMove: true } } }]]),
+}));
+vi.mock("../../state/session", () => ({ readEnvironmentScope: () => true }));
+
 it("selects one destination per device without activating the thread", async () => {
   state.open.mockReset();
   const activate = vi.fn();

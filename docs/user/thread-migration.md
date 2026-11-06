@@ -6,19 +6,17 @@ Connect both environments, then right-click a thread and choose **Move to anothe
 Select a project on the destination. Each moved thread gets its own checkout, even when it shared
 one with its parent on the source. Archived descendants stay archived, and deleted descendants are
 omitted. Fork ancestor snapshots are retained in the destination's Archive
-so inherited history can still be read. The desktop command palette and mobile thread menu offer
+so inherited history can still be read. The command palette and mobile thread menu offer
 the same action when both servers support it.
 
-Finish the thread and its subagents first. Moving automatically commits checkout changes and
-pushes the branch to `origin`, then creates a destination worktree at that commit. Git hooks run
-normally; conflicts, push failures, or another active thread sharing the checkout stop the move.
-A failed move keeps the source and any preparation commit, so retrying does not lose work. Install dependencies
+Finish the thread and its subagents first. Commit and push workspace changes: the destination
+gets a new worktree at the saved commit, not a copy of uncommitted files. Install dependencies
 or run the project's setup script in that worktree before continuing.
 
 The move copies saved messages, activity, attachments, and local subthreads. The first new turn
 starts a fresh provider conversation using a [portable handoff](./portable-handoffs.md); a live
 provider process and Git checkpoints do not move. The selected provider must be enabled on the
-destination. Transfers allow up to 32 MiB of attachments and 63 MiB of total saved data.
+destination. Transfers allow up to 32 MiB of attachments and about 47 MiB of compressed saved data.
 
 T3 Code archives the original only after the destination confirms receipt. It remains recoverable
 in Archive. If the source changes or disconnects during the move, the destination copy remains

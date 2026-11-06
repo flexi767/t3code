@@ -218,15 +218,16 @@ pub enum DrainEnd {
     Cancelled(String),
 }
 
-/// Waits for admitted turns and never stops one: every path that does not activate restores
-/// admission, and a probe that cannot prove a host idle counts as not idle.
+/// Waits for admitted turns and stops one only under `force_on_timeout`: every path that does not
+/// activate restores admission, and a probe that cannot prove a host idle counts as not idle.
 pub fn drain_and_activate(
     hosts: &[&dyn DrainHost],
     owner: &str,
     timeout_seconds: u64,
+    force_on_timeout: bool,
     clock: &dyn Clock,
     cancelled: &dyn Fn() -> bool,
-    activate: &mut dyn FnMut() -> Result<()>,
+    activate: &mut dyn FnMut(bool) -> Result<()>,
 ) -> Result<DrainEnd> {
     let ttl = timeout_seconds + ACTIVATION_GRACE_SECONDS;
     let release_all = |hosts: &[&dyn DrainHost]| {
@@ -264,9 +265,12 @@ pub fn drain_and_activate(
             break Ok(DrainEnd::Cancelled(format!("the hold on {name} ended")));
         }
         if waiting.is_empty() {
-            break activate().map(|()| DrainEnd::Activated);
+            break activate(false).map(|()| DrainEnd::Activated);
         }
         if clock.now_ms() >= deadline {
+            if force_on_timeout {
+                break activate(true).map(|()| DrainEnd::Activated);
+            }
             break Ok(DrainEnd::TimedOut(waiting));
         }
         clock.sleep(POLL_INTERVAL);
@@ -285,7 +289,7 @@ mod tests {
         sync::mpsc,
     };
 
-    const RUNS: &str = "CREATE TABLE orchestration_v2_projection_runs(status TEXT);";
+    const RUNS: &str = "CREATE TABLE orchestration_v2_projection_threads(thread_id TEXT, title TEXT, archived_at TEXT, deleted_at TEXT); CREATE TABLE orchestration_v2_projection_runs(thread_id TEXT, status TEXT, payload_json TEXT);";
 
     struct FakeHost {
         name: &'static str,
@@ -343,10 +347,18 @@ mod tests {
     fn run_drain(hosts: &[&dyn DrainHost], timeout: u64) -> (Result<DrainEnd>, u32) {
         let clock = FakeClock(Cell::new(0));
         let mut activations = 0;
-        let end = drain_and_activate(hosts, "owner", timeout, &clock, &|| false, &mut || {
-            activations += 1;
-            Ok(())
-        });
+        let end = drain_and_activate(
+            hosts,
+            "owner",
+            timeout,
+            false,
+            &clock,
+            &|| false,
+            &mut |_| {
+                activations += 1;
+                Ok(())
+            },
+        );
         (end, activations)
     }
 
@@ -379,6 +391,20 @@ mod tests {
         }
     }
     #[test]
+    fn force_on_timeout_activates_as_forced_and_restores_admission() {
+        let m5 = fake("m5", vec![Ok(Probe::Active(1))]);
+        let clock = FakeClock(Cell::new(0));
+        let mut forced = Vec::new();
+        let end = drain_and_activate(&[&m5], "owner", 1, true, &clock, &|| false, &mut |force| {
+            forced.push(force);
+            Ok(())
+        });
+        assert_eq!(end.unwrap(), DrainEnd::Activated);
+        assert_eq!(forced, [true]);
+        assert_eq!(m5.log.borrow().last().unwrap(), "release");
+    }
+
+    #[test]
     fn an_unreadable_host_counts_as_busy() {
         let j = fake("j", vec![Err("ssh down".into())]);
         let (end, activations) = run_drain(&[&j], 4);
@@ -406,8 +432,16 @@ mod tests {
             polls.set(polls.get() + 1);
             polls.get() > 2
         };
-        let mut activate = || -> Result<()> { panic!("must not activate") };
-        let end = drain_and_activate(&[&m5], "owner", 60, &clock, &cancelled, &mut activate);
+        let mut activate = |_: bool| -> Result<()> { panic!("must not activate") };
+        let end = drain_and_activate(
+            &[&m5],
+            "owner",
+            60,
+            false,
+            &clock,
+            &cancelled,
+            &mut activate,
+        );
         assert_eq!(end.unwrap(), DrainEnd::Cancelled("interrupted".into()));
         assert_eq!(m5.log.borrow().last().unwrap(), "release");
     }
@@ -425,8 +459,8 @@ mod tests {
     fn a_failed_activation_still_restores_admission() {
         let m5 = fake("m5", vec![Ok(Probe::Active(0))]);
         let clock = FakeClock(Cell::new(0));
-        let mut activate = || -> Result<()> { Err("activation failed".into()) };
-        let end = drain_and_activate(&[&m5], "owner", 60, &clock, &|| false, &mut activate);
+        let mut activate = |_: bool| -> Result<()> { Err("activation failed".into()) };
+        let end = drain_and_activate(&[&m5], "owner", 60, false, &clock, &|| false, &mut activate);
         assert!(end.is_err());
         assert_eq!(m5.log.borrow().last().unwrap(), "release");
     }
@@ -471,7 +505,7 @@ mod tests {
         let mut stdin = writer.stdin.take().unwrap();
         writeln!(
             stdin,
-            "BEGIN IMMEDIATE; INSERT INTO orchestration_v2_projection_runs VALUES ('starting'); SELECT 'ready';"
+            "BEGIN IMMEDIATE; INSERT INTO orchestration_v2_projection_runs VALUES ('t', 'starting', '{{}}'); SELECT 'ready';"
         )
         .unwrap();
         stdin.flush().unwrap();
@@ -510,7 +544,7 @@ mod tests {
             &[
                 crate::s(&db),
                 &format!(
-                    "PRAGMA journal_mode=WAL; {RUNS} INSERT INTO orchestration_v2_projection_runs VALUES ('running');"
+                    "PRAGMA journal_mode=WAL; {RUNS} INSERT INTO orchestration_v2_projection_runs VALUES ('t', 'running', '{{}}');"
                 ),
             ],
         )
@@ -539,13 +573,21 @@ mod tests {
         let clock = FinishingClock(&db, Cell::new(0));
         let hold = host.hold_path();
         let activated = Cell::new(0);
-        let mut activate = || -> Result<()> {
+        let mut activate = |_: bool| -> Result<()> {
             assert!(hold.exists(), "turns stay held through activation");
             assert_eq!(active_turns_at(&db)?, 0);
             activated.set(activated.get() + 1);
             Ok(())
         };
-        let end = drain_and_activate(&[&host], "owner", 60, &clock, &|| false, &mut activate);
+        let end = drain_and_activate(
+            &[&host],
+            "owner",
+            60,
+            false,
+            &clock,
+            &|| false,
+            &mut activate,
+        );
         assert_eq!(end.unwrap(), DrainEnd::Activated);
         assert_eq!(activated.get(), 1);
         assert!(!hold.exists());

@@ -1,11 +1,18 @@
-import type { ThreadId, ThreadMoveImportInput, ThreadMoveReceipt } from "@t3tools/contracts";
+import {
+  ThreadMoveError,
+  type ThreadId,
+  type ThreadMoveImportInput,
+  type ThreadMoveReceipt,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import * as ManagedRelayDpopSigner from "../relay/managedRelay.ts";
 import { EnvironmentRpcUnavailableError } from "../rpc/client.ts";
+import { RemoteEnvironmentAuthFetchError } from "../rpc/http.ts";
 import {
   executeAuthenticatedEnvironmentHttpRequest,
   withOrchestrationProtocolHeader,
@@ -28,10 +35,23 @@ const context = Effect.gen(function* () {
   };
 });
 
+const isThreadMoveError = Schema.is(ThreadMoveError);
+
+/** The shared request mapper only knows common errors; a move's refusal must keep its message. */
+export const surfaceThreadMoveRefusal = <A, E, R>(
+  request: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | ThreadMoveError, R> =>
+  request.pipe(
+    Effect.mapError((error) =>
+      error instanceof RemoteEnvironmentAuthFetchError && isThreadMoveError(error.cause)
+        ? error.cause
+        : error,
+    ),
+  );
+
 export const exportThreadMove = Effect.fn("threadMove.export")(function* (payload: {
   readonly threadId: ThreadId;
   readonly transferId: string;
-  readonly prepareRepository?: boolean;
 }) {
   return yield* executeAuthenticatedEnvironmentHttpRequest({
     ...(yield* context),
@@ -41,7 +61,7 @@ export const exportThreadMove = Effect.fn("threadMove.export")(function* (payloa
     timeoutMs: 120_000,
     request: ({ client, headers }) =>
       client.threadMoveExport({ payload, headers: withOrchestrationProtocolHeader(headers) }),
-  });
+  }).pipe(surfaceThreadMoveRefusal);
 });
 
 export const importThreadMove = Effect.fn("threadMove.import")(function* (
@@ -55,7 +75,7 @@ export const importThreadMove = Effect.fn("threadMove.import")(function* (
     timeoutMs: 120_000,
     request: ({ client, headers }) =>
       client.threadMoveImport({ payload, headers: withOrchestrationProtocolHeader(headers) }),
-  });
+  }).pipe(surfaceThreadMoveRefusal);
 });
 
 export const finishThreadMove = Effect.fn("threadMove.finish")(function* (
@@ -69,5 +89,5 @@ export const finishThreadMove = Effect.fn("threadMove.finish")(function* (
     timeoutMs: 60_000,
     request: ({ client, headers }) =>
       client.threadMoveFinish({ payload, headers: withOrchestrationProtocolHeader(headers) }),
-  });
+  }).pipe(surfaceThreadMoveRefusal);
 });

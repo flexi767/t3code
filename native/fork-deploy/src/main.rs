@@ -8,10 +8,11 @@ use std::{
     error::Error,
     fs,
     io::{Read, Write},
+    os::unix::process::CommandExt,
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -21,6 +22,8 @@ const CONNECT_KEYS: [&str; 3] = [
     "T3CODE_CLERK_PUBLISHABLE_KEY",
     "T3CODE_CLERK_CLI_OAUTH_CLIENT_ID",
 ];
+
+const CONNECT_JWT_TEMPLATE_KEY: &str = "T3CODE_CLERK_JWT_TEMPLATE";
 
 fn validate_connect_environment(values: &BTreeMap<String, String>) -> Result<()> {
     if CONNECT_KEYS
@@ -45,20 +48,26 @@ fn connect_build_environment() -> Result<BTreeMap<String, String>> {
     } else {
         BTreeMap::new()
     };
-    let values = CONNECT_KEYS
+    let lookup = |key: &str| {
+        env::var(key)
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .or_else(|| stored.get(key).cloned())
+    };
+    let mut values: BTreeMap<String, String> = CONNECT_KEYS
         .into_iter()
-        .map(|key| {
-            (
-                key.to_owned(),
-                env::var(key)
-                    .ok()
-                    .filter(|v| !v.trim().is_empty())
-                    .or_else(|| stored.get(key).cloned())
-                    .unwrap_or_default(),
-            )
-        })
+        .map(|key| (key.to_owned(), lookup(key).unwrap_or_default()))
         .collect();
     validate_connect_environment(&values)?;
+    // The hosted web client needs this too, but a repo .env can supply it to the build instead.
+    match lookup(CONNECT_JWT_TEMPLATE_KEY) {
+        Some(template) => {
+            values.insert(CONNECT_JWT_TEMPLATE_KEY.to_owned(), template);
+        }
+        None => eprintln!(
+            "Warning: {CONNECT_JWT_TEMPLATE_KEY} is not set here; web clients lose T3 Connect unless .env provides it."
+        ),
+    }
     Ok(values)
 }
 
@@ -183,9 +192,17 @@ fn publish(source: &Path, target: &Path) -> Result<()> {
     }
     Ok(())
 }
-fn idle() -> Result<()> {
-    let db = home()?.join(".t3/userdata/statev2.sqlite");
-    idle_at(&db)
+const DESKTOP_APP: &str = "T3 Code (Beta)";
+const SERVICE_LABEL: &str = "com.t3tools.t3code.service";
+
+/// How activation treats running turns. Neither set: refuse unless already idle.
+#[derive(Clone, Copy, Default)]
+struct Activation {
+    idle_timeout: Option<u64>,
+    force: bool,
+}
+fn state_db() -> Result<PathBuf> {
+    Ok(home()?.join(".t3/userdata/statev2.sqlite"))
 }
 fn read_idle_count(mut read: impl FnMut() -> Result<String>) -> Result<String> {
     for attempt in 0..10 {
@@ -225,40 +242,51 @@ fn sqlite_read_args(db: &Path) -> [String; 2] {
         ["-batch".into(), format!("file:{uri}?immutable=1")]
     }
 }
-fn active_turns_at(db: &Path) -> Result<u64> {
+/// A queued run counts unless it is held or archived: a hold refuses new sends but queued work still
+/// starts, while a queue blocked by a usage limit would otherwise never let the host go idle.
+fn active_runs(db: &Path) -> Result<Vec<Value>> {
     if !db.exists() {
-        return Ok(0);
+        return Ok(Vec::new());
     }
     let open = sqlite_read_args(db);
-    let count = read_idle_count(|| output(
-        "sqlite3",
-        &[
-            open[0].as_str(),
-            open[1].as_str(),
-            "SELECT count(*) FROM orchestration_v2_projection_runs WHERE status IN ('queued','preparing','starting','running','waiting')",
-        ],
-    )).map_err(|error| format!("Cannot check active turns in {}: {error}", db.display()))?;
-    Ok(count.parse()?)
+    let query = "SELECT r.thread_id AS threadId, t.title AS title, r.status AS status \
+         FROM orchestration_v2_projection_runs AS r \
+         LEFT JOIN orchestration_v2_projection_threads AS t ON t.thread_id = r.thread_id \
+         WHERE r.status IN ('preparing','starting','running','waiting') \
+         OR (r.status = 'queued' AND json_extract(r.payload_json, '$.queueHeld') IS NOT 1 \
+         AND t.archived_at IS NULL AND t.deleted_at IS NULL)";
+    let text = read_idle_count(|| {
+        output(
+            "sqlite3",
+            &["-json", open[0].as_str(), open[1].as_str(), query],
+        )
+    })
+    .map_err(|error| format!("Cannot check active turns in {}: {error}", db.display()))?;
+    if text.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(serde_json::from_str(&text)?)
+}
+fn active_turns_at(db: &Path) -> Result<u64> {
+    Ok(active_runs(db)?.len() as u64)
 }
 fn idle_at(db: &Path) -> Result<()> {
     let count = active_turns_at(db)?;
     if count != 0 {
-        return Err(
-            format!("{count} active turns; finish before switching server versions").into(),
-        );
+        return Err(format!(
+            "{count} active turns; finish before switching server versions, or use --when-idle-timeout"
+        )
+        .into());
     }
     Ok(())
 }
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_millis() as u64)
+fn idle() -> Result<()> {
+    idle_at(&state_db()?)
 }
-fn backup(ver: &str) -> Result<PathBuf> {
-    idle()?;
-    let dest = home()?.join(".t3/backups/fleet").join(ver);
-    backup_at(&home()?.join(".t3/userdata/statev2.sqlite"), &dest)?;
-    Ok(dest)
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as u64)
 }
 fn backup_at(db: &Path, dest: &Path) -> Result<()> {
     fs::create_dir_all(dest)?;
@@ -299,6 +327,25 @@ fn installed_version(app: &Path) -> Option<String> {
     )
     .ok()
 }
+fn restore_database(db: &Path, backup: &Path) -> Result<()> {
+    let saved = backup.join("statev2.sqlite");
+    if !saved.exists() {
+        return Ok(());
+    }
+    // A leftover WAL from the failed version would replay onto the restored main file.
+    for suffix in ["-wal", "-shm"] {
+        let side = PathBuf::from(format!("{}{suffix}", db.display()));
+        if side.exists() {
+            fs::remove_file(side)?;
+        }
+    }
+    // Moved, not copied: the old version keeps writing, so a later retry needs a fresh snapshot.
+    fs::rename(saved, db)?;
+    Ok(())
+}
+fn backup_dir(ver: &str) -> Result<PathBuf> {
+    Ok(home()?.join(".t3/backups/fleet").join(ver))
+}
 fn stage(ver: &str, archive: &Path) -> Result<()> {
     let target = runtime(ver)?;
     stage_at(ver, archive, &target)
@@ -333,14 +380,24 @@ fn stage_at(ver: &str, archive: &Path, target: &Path) -> Result<()> {
     println!("Staged {ver}");
     Ok(())
 }
-fn link_cli(ver: &str) -> Result<()> {
-    let launcher = home()?.join(".local/bin/t3");
+fn link_at(launcher: &Path, target: &Path) -> Result<()> {
     let temporary = launcher.with_file_name("t3.fleet-next");
-    std::os::unix::fs::symlink(runtime(ver)?.join("t3"), &temporary)?;
+    let _ = fs::remove_file(&temporary);
+    std::os::unix::fs::symlink(target, &temporary)?;
     fs::rename(temporary, launcher)?;
     Ok(())
 }
-fn service_for_version(original: &str, ver: &str) -> Result<String> {
+fn link_cli(ver: &str) -> Result<()> {
+    link_at(&home()?.join(".local/bin/t3"), &runtime(ver)?.join("t3"))
+}
+fn service_path() -> Result<PathBuf> {
+    Ok(home()?.join(if cfg!(target_os = "macos") {
+        "Library/LaunchAgents/com.t3tools.t3code.service.plist"
+    } else {
+        ".config/systemd/user/t3code.service"
+    }))
+}
+fn service_with_version(original: &str, ver: &str) -> Result<(String, String)> {
     let marker = "/runtime/versions/";
     if original.matches(marker).count() != 1 {
         return Err("Expected exactly one managed executable".into());
@@ -350,45 +407,120 @@ fn service_for_version(original: &str, ver: &str) -> Result<String> {
         + original[start..]
             .find('/')
             .ok_or("Invalid service executable")?;
-    let mut replacement = original.to_string();
+    let mut replacement = original.to_owned();
     replacement.replace_range(start..end, ver);
-    Ok(replacement)
+    Ok((replacement, original[start..end].to_owned()))
 }
-fn activate(ver: &str) -> Result<()> {
+trait ServiceControl {
+    fn stop(&self) -> Result<()>;
+    fn start(&self) -> Result<()>;
+    fn verify(&self, ver: &str) -> Result<()>;
+}
+struct InstalledService;
+impl ServiceControl for InstalledService {
+    fn stop(&self) -> Result<()> {
+        if cfg!(target_os = "macos") {
+            let domain = format!("gui/{}", output("id", &["-u"])?);
+            // Bootout fails on a service that isn't loaded, as after an interrupted activation.
+            if output(
+                "launchctl",
+                &["print", &format!("{domain}/{SERVICE_LABEL}")],
+            )
+            .is_ok()
+            {
+                run("launchctl", &["bootout", &domain, s(&service_path()?)])?;
+            }
+            Ok(())
+        } else {
+            run("systemctl", &["--user", "stop", "t3code"])
+        }
+    }
+    fn start(&self) -> Result<()> {
+        if cfg!(target_os = "macos") {
+            let domain = format!("gui/{}", output("id", &["-u"])?);
+            if output(
+                "launchctl",
+                &["print", &format!("{domain}/{SERVICE_LABEL}")],
+            )
+            .is_ok()
+            {
+                return Ok(());
+            }
+            run("launchctl", &["bootstrap", &domain, s(&service_path()?)])
+        } else {
+            run("systemctl", &["--user", "daemon-reload"])?;
+            run("systemctl", &["--user", "start", "t3code"])
+        }
+    }
+    fn verify(&self, ver: &str) -> Result<()> {
+        verify(ver)
+    }
+}
+struct SwitchPaths {
+    service: PathBuf,
+    db: PathBuf,
+    backup: PathBuf,
+    launcher: PathBuf,
+    runtime: PathBuf,
+}
+/// Stops first so the backup can't miss what graceful shutdown records for restart continuation.
+/// A version that never comes up gets the previous service, launcher and database back.
+fn switch_service(ver: &str, paths: &SwitchPaths, control: &impl ServiceControl) -> Result<()> {
+    let original = fs::read_to_string(&paths.service)?;
+    let (replacement, previous) = service_with_version(&original, ver)?;
+    let previous_link = fs::read_link(&paths.launcher).ok();
+    // A helper that died mid-switch leaves the new definition behind with nothing running.
+    if previous == ver {
+        link_at(&paths.launcher, &paths.runtime.join("t3"))?;
+        control.start()?;
+        return control.verify(ver);
+    }
+    control.stop()?;
+    backup_at(&paths.db, &paths.backup)?;
+    fs::copy(
+        &paths.service,
+        paths
+            .backup
+            .join(paths.service.file_name().ok_or("Service filename")?),
+    )?;
+    fs::write(&paths.service, replacement)?;
+    link_at(&paths.launcher, &paths.runtime.join("t3"))?;
+    let failure = match control.start().and_then(|()| control.verify(ver)) {
+        Ok(()) => return Ok(()),
+        Err(error) => error,
+    };
+    let _ = control.stop();
+    restore_database(&paths.db, &paths.backup)?;
+    fs::write(&paths.service, original)?;
+    if let Some(link) = previous_link {
+        link_at(&paths.launcher, &link)?;
+    }
+    control.start()?;
+    control.verify(&previous)?;
+    Err(format!("{ver} failed ({failure}); rolled back to {previous}").into())
+}
+fn service_on(ver: &str) -> Result<bool> {
+    let (_, current) = service_with_version(&fs::read_to_string(service_path()?)?, ver)?;
+    Ok(current == ver)
+}
+fn activate(ver: &str, force: bool) -> Result<()> {
     if fs::read_to_string(runtime(ver)?.join(".install-complete"))?.trim() != ver {
         return Err("Unverified runtime".into());
     }
-    let saved = backup(ver)?;
-    let mac = cfg!(target_os = "macos");
-    let service = home()?.join(if mac {
-        "Library/LaunchAgents/com.t3tools.t3code.service.plist"
-    } else {
-        ".config/systemd/user/t3code.service"
-    });
-    let original = fs::read_to_string(&service)?;
-    let replacement = service_for_version(&original, ver)?;
-    // A retry must not bounce a server that a previous attempt already moved to this version.
-    if replacement == original {
-        link_cli(ver)?;
-        return Ok(());
+    if !force && !service_on(ver)? {
+        idle()?;
     }
-    fs::copy(
-        &service,
-        saved.join(service.file_name().ok_or("Service filename")?),
-    )?;
-    let domain = format!("gui/{}", output("id", &["-u"])?);
-    if mac {
-        run("launchctl", &["bootout", &domain, s(&service)])?;
-    }
-    fs::write(&service, replacement)?;
-    link_cli(ver)?;
-    if mac {
-        run("launchctl", &["bootstrap", &domain, s(&service)])?;
-    } else {
-        run("systemctl", &["--user", "daemon-reload"])?;
-        run("systemctl", &["--user", "restart", "t3code"])?;
-    }
-    Ok(())
+    switch_service(
+        ver,
+        &SwitchPaths {
+            service: service_path()?,
+            db: state_db()?,
+            backup: backup_dir(ver)?,
+            launcher: home()?.join(".local/bin/t3"),
+            runtime: runtime(ver)?,
+        },
+        &InstalledService,
+    )
 }
 fn verify(ver: &str) -> Result<()> {
     if output(s(&home()?.join(".local/bin/t3")), &["--version"])? != format!("t3 v{ver}") {
@@ -397,7 +529,8 @@ fn verify(ver: &str) -> Result<()> {
     if fs::read_to_string(runtime(ver)?.join(".install-complete"))?.trim() != ver {
         return Err("Runtime marker mismatch".into());
     }
-    let deadline = Instant::now() + Duration::from_secs(90);
+    // Long enough for migrations, which run before the server listens.
+    let deadline = Instant::now() + Duration::from_secs(300);
     loop {
         if let Ok(text) = output(
             "curl",
@@ -463,29 +596,8 @@ fn remote(host: &str, helper: &str, args: &[&str]) -> Result<()> {
     }
     Ok(())
 }
-fn seed_cache(destination: &Path, platform: &str) -> Result<()> {
-    if destination.exists() {
-        return Ok(());
-    }
-    let mut candidates = Vec::new();
-    for entry in fs::read_dir("/tmp")? {
-        let path = entry?.path();
-        if path != destination
-            && path.file_name().is_some_and(|n| {
-                n.to_string_lossy().starts_with("t3-fleet-")
-                    && n.to_string_lossy().ends_with(&format!("-{platform}.tar"))
-            })
-            && path.is_file()
-        {
-            candidates.push((fs::metadata(&path)?.modified()?, path));
-        }
-    }
-    candidates.sort();
-    if let Some((_, previous)) = candidates.last() {
-        fs::copy(previous, destination)?;
-    }
-    Ok(())
-}
+const SSH_TRANSPORT: &str =
+    "ssh -o ConnectTimeout=8 -o ServerAliveInterval=10 -o ServerAliveCountMax=3";
 fn prepare_helpers(ver: &str) -> Result<String> {
     let directory = format!("/tmp/t3-fork-deploy-{ver}");
     ssh("j", &format!("mkdir -p {}", quote(&directory)))?;
@@ -494,6 +606,8 @@ fn prepare_helpers(ver: &str) -> Result<String> {
         "rsync",
         &[
             "-azc",
+            "-e",
+            SSH_TRANSPORT,
             "--exclude",
             "target",
             &format!("{}/", s(&source)),
@@ -521,26 +635,15 @@ fn prepare_helpers(ver: &str) -> Result<String> {
     }
     Ok(helper)
 }
-fn distribute(ver: &str, builds: &Path, stage_only: bool) -> Result<()> {
+fn distribute(ver: &str, builds: &Path, stage_only: bool, activation: Activation) -> Result<()> {
     let helper = prepare_helpers(ver)?;
-    let transport = "ssh -o ConnectTimeout=8 -o ServerAliveInterval=10 -o ServerAliveCountMax=3";
+    let transport = SSH_TRANSPORT;
     for platform in ["linux-x64", "darwin-arm64"] {
         if platform == "darwin-arm64" && !remote_hosts().contains(&"m3") {
             continue;
         }
         let archive = builds.join(format!("fleet-{platform}.tar"));
         let destination = format!("/tmp/t3-fleet-{ver}-{platform}.tar");
-        remote(
-            "j",
-            &helper,
-            &[
-                "host-seed-cache",
-                "--archive",
-                &destination,
-                "--platform",
-                platform,
-            ],
-        )?;
         run(
             "rsync",
             &[
@@ -560,17 +663,6 @@ fn distribute(ver: &str, builds: &Path, stage_only: bool) -> Result<()> {
             "j"
         };
         if host == "m3" {
-            remote(
-                host,
-                &helper,
-                &[
-                    "host-seed-cache",
-                    "--archive",
-                    &destination,
-                    "--platform",
-                    platform,
-                ],
-            )?;
             ssh(
                 host,
                 &format!(
@@ -594,27 +686,154 @@ fn distribute(ver: &str, builds: &Path, stage_only: bool) -> Result<()> {
         )?;
     }
     stage(ver, &builds.join("fleet-darwin-arm64.tar"))?;
+    // J's /tmp is RAM-backed; a staged runtime no longer needs its archive.
+    for host in remote_hosts() {
+        ssh(host, "rm -f /tmp/t3-fleet-*")?;
+    }
     if stage_only {
         println!("Fleet {ver} staged; no running server or desktop was changed.");
         return Ok(());
     }
-    activate_fleet(ver, builds, &helper)
+    activate_with(ver, builds, &helper, activation)
 }
 
-fn activate_fleet(ver: &str, builds: &Path, helper: &str) -> Result<()> {
-    idle()?;
+fn fleet_active_runs(helper: &str) -> Result<Vec<Value>> {
+    let mut active = Vec::new();
+    let mut collect = |host: &str, runs: Vec<Value>| {
+        active.extend(runs.into_iter().map(|mut run| {
+            run["host"] = host.into();
+            run
+        }));
+    };
+    collect("m5", active_runs(&state_db()?)?);
+    for host in remote_hosts() {
+        let text = ssh(host, &format!("{} host-active", quote(helper)))?;
+        collect(host, serde_json::from_str(&text)?);
+    }
+    Ok(active)
+}
+fn describe_runs(runs: &[Value]) -> String {
+    runs.iter()
+        .map(|run| {
+            format!(
+                "  {} {} [{}] {}",
+                run["host"].as_str().unwrap_or("?"),
+                run["threadId"].as_str().unwrap_or("?"),
+                run["status"].as_str().unwrap_or("?"),
+                run["title"].as_str().unwrap_or(""),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+fn desktop_running() -> Result<bool> {
+    Ok(output(
+        "osascript",
+        &["-e", &format!("application \"{DESKTOP_APP}\" is running")],
+    )? == "true")
+}
+fn quit_desktop() -> Result<()> {
+    run(
+        "osascript",
+        &["-e", &format!("tell application \"{DESKTOP_APP}\" to quit")],
+    )?;
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while desktop_running()? {
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "{DESKTOP_APP} did not quit; close any open dialog and retry. Nothing changed on M5."
+            )
+            .into());
+        }
+        thread::sleep(Duration::from_secs(1));
+    }
+    Ok(())
+}
+/// Moves the old app aside rather than deleting it, so a failed install can put it back.
+fn replace_desktop(built: &Path, aside: &Path) -> Result<()> {
+    let installed = PathBuf::from(format!("/Applications/{DESKTOP_APP}.app"));
+    fs::create_dir_all(aside.parent().ok_or("Backup directory")?)?;
+    fs::rename(&installed, aside)?;
+    if let Err(error) = run("ditto", &[s(built), s(&installed)]) {
+        let _ = fs::remove_dir_all(&installed);
+        fs::rename(aside, &installed)?;
+        run("open", &[s(&installed)])?;
+        return Err(error);
+    }
+    Ok(())
+}
+fn activate_local(ver: &str, builds: &Path, force: bool) -> Result<()> {
+    let built = builds.join(format!("desktop/{DESKTOP_APP}.app"));
+    let installed = PathBuf::from(format!("/Applications/{DESKTOP_APP}.app"));
+    let saved = backup_dir(ver)?;
+    let aside = saved.join(format!("{DESKTOP_APP}.app"));
+    let launcher = home()?.join(".local/bin/t3");
+    // Decided before quitting: an app that cannot be replaced must keep running.
+    if !desktop_swap_needed(
+        installed_version(&installed).as_deref(),
+        ver,
+        aside.exists(),
+    )? {
+        return link_cli(ver).and_then(|()| verify(ver));
+    }
+    if !force {
+        idle()?;
+    }
+    let db = state_db()?;
+    quit_desktop()?;
+    backup_at(&db, &saved)?;
+    replace_desktop(&built, &aside)?;
+    let previous_link = fs::read_link(&launcher).ok();
+    link_cli(ver)?;
+    run("open", &[s(&installed)])?;
+    let Err(failure) = verify(ver) else {
+        return Ok(());
+    };
+    quit_desktop()?;
+    fs::remove_dir_all(&installed)?;
+    fs::rename(&aside, &installed)?;
+    restore_database(&db, &saved)?;
+    if let Some(link) = previous_link {
+        link_at(&launcher, &link)?;
+    }
+    run("open", &[s(&installed)])?;
+    Err(format!("M5 failed ({failure}); restored the previous app and database").into())
+}
+fn activate_fleet(ver: &str, builds: &Path, helper: &str, force: bool) -> Result<()> {
+    env::set_current_dir(root())?;
     if fs::read_to_string(runtime(ver)?.join(".install-complete"))?.trim() != ver {
         return Err("Local staged runtime is incomplete".into());
     }
-    let app = builds.join("desktop/T3 Code (Beta).app");
+    let app = builds.join(format!("desktop/{DESKTOP_APP}.app"));
     run("codesign", &["--verify", "--deep", "--strict", s(&app)])?;
+    let interrupted = if force {
+        let runs = fleet_active_runs(helper)?;
+        if !runs.is_empty() {
+            println!(
+                "Forcing the restart. These threads are interrupted and resume automatically where \
+                 supported. A resumed agent may re-run a command that had only partly finished, \
+                 such as a migration or a push; check them. A [waiting] thread needs you first.\n{}",
+                describe_runs(&runs)
+            );
+        }
+        runs
+    } else {
+        if installed_version(Path::new(&format!("/Applications/{DESKTOP_APP}.app"))).as_deref()
+            != Some(ver)
+        {
+            idle()?;
+        }
+        for host in remote_hosts() {
+            remote(host, helper, &["host-idle", "--version", ver])?;
+        }
+        Vec::new()
+    };
     for host in remote_hosts() {
-        remote(host, helper, &["host-idle"])?;
-    }
-    let saved = backup(ver)?;
-    for host in remote_hosts() {
-        remote(host, helper, &["host-activate", "--version", ver])?;
-        remote(host, helper, &["host-verify", "--version", ver])?;
+        let mut arguments = vec!["host-activate", "--version", ver];
+        if force {
+            arguments.push("--force");
+        }
+        remote(host, helper, &arguments)?;
         let runner = output(
             "node",
             &[
@@ -640,39 +859,97 @@ fn activate_fleet(ver: &str, builds: &Path, helper: &str) -> Result<()> {
         if !result.status.success()
             || String::from_utf8(result.stdout)?.trim() != format!("t3 v{ver}")
         {
-            return Err(format!("{host}: SSH runner version mismatch").into());
+            return Err(format!(
+                "{host}: SSH runner version mismatch; earlier hosts already run {ver}"
+            )
+            .into());
         }
     }
-    idle()?;
-    let installed = Path::new("/Applications/T3 Code (Beta).app");
-    let previous = saved.join(installed.file_name().unwrap());
-    if desktop_swap_needed(
-        installed_version(installed).as_deref(),
-        ver,
-        previous.exists(),
-    )? {
-        run(
-            "osascript",
-            &["-e", "tell application \"T3 Code (Beta)\" to quit"],
-        )?;
-        thread::sleep(Duration::from_secs(2));
-        fs::rename(installed, previous)?;
-        run(
-            "ditto",
-            &[s(&builds.join("desktop/T3 Code (Beta).app")), s(installed)],
-        )?;
-    }
+    activate_local(ver, builds, force)?;
     link_cli(ver)?;
-    run("open", &[s(installed)])?;
     verify(ver)?;
+    let source: Value =
+        serde_json::from_slice(&fs::read(runtime(ver)?.join(".fleet-source.json"))?)?;
     fs::write(
         builds.join("fleet-complete.json"),
-        serde_json::to_vec_pretty(
-            &json!({"version":ver,"hosts":std::iter::once(&"m5").chain(remote_hosts()).collect::<Vec<_>>(),"source":output("git", &["rev-parse","HEAD"])?}),
-        )?,
+        serde_json::to_vec_pretty(&json!({
+            "version": ver,
+            "hosts": std::iter::once(&"m5").chain(remote_hosts()).collect::<Vec<_>>(),
+            "source": source["source"],
+            "forced": force,
+            "interrupted": interrupted,
+        }))?,
     )?;
-    println!("Fleet complete: M5, M3 and J run {ver}");
+    println!(
+        "Fleet complete: M5 and {} run {ver}",
+        remote_hosts().join(", ")
+    );
     Ok(())
+}
+/// A T3 turn's process dies with the restart it requested, and that turn alone keeps the fleet
+/// busy. Leaving the process group and parent frees it from both once the turn ends.
+fn detach(ver: &str) -> Result<()> {
+    let log_path = home()?.join(format!(".t3/logs/fleet-{ver}.log"));
+    fs::create_dir_all(log_path.parent().ok_or("Log directory")?)?;
+    let log = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)?;
+    let child = Command::new(env::current_exe()?)
+        .args(
+            env::args()
+                .skip(1)
+                .filter(|argument| argument != "--detach"),
+        )
+        .env_remove("T3CODE_THREAD_ID")
+        .stdin(Stdio::null())
+        .stdout(log.try_clone()?)
+        .stderr(log)
+        .process_group(0)
+        .spawn()?;
+    println!(
+        "Activating in the background as pid {}; log: {}\nEnd this turn so the fleet can go idle.",
+        child.id(),
+        log_path.display()
+    );
+    Ok(())
+}
+fn parse_activation(flags: &BTreeMap<String, String>) -> Result<Activation> {
+    let idle_timeout = flags
+        .get("when-idle-timeout")
+        .map(|seconds| seconds.parse::<u64>())
+        .transpose()
+        .map_err(|_| "--when-idle-timeout takes seconds")?;
+    if idle_timeout.is_some_and(|seconds| seconds == 0 || seconds > drain::MAX_WAIT_SECONDS) {
+        return Err(format!(
+            "--when-idle-timeout must be 1 to {} seconds",
+            drain::MAX_WAIT_SECONDS
+        )
+        .into());
+    }
+    Ok(Activation {
+        idle_timeout,
+        force: flags.contains_key("force"),
+    })
+}
+/// Returns true when this process handed the work to a detached copy of itself.
+fn leave_t3_turn(ver: &str, flags: &BTreeMap<String, String>) -> Result<bool> {
+    if flags.contains_key("detach") {
+        // Its own turn is still running when the copy starts, so a plain idle check always refuses.
+        if !flags.contains_key("when-idle-timeout") && !flags.contains_key("force") {
+            return Err("--detach needs --when-idle-timeout or --force".into());
+        }
+        detach(ver)?;
+        return Ok(true);
+    }
+    if env::var_os("T3CODE_THREAD_ID").is_some() {
+        return Err(
+            "This runs inside a T3 turn, which the restart would kill and which keeps the fleet \
+             busy. Add --detach, then end the turn, or run from a terminal outside T3."
+                .into(),
+        );
+    }
+    Ok(false)
 }
 
 fn receipt_covers(receipt: &str, ver: &str, hosts: &[&str]) -> bool {
@@ -694,29 +971,22 @@ fn fleet_already_active(builds: &Path, ver: &str) -> bool {
         .is_ok_and(|receipt| receipt_covers(&receipt, ver, &hosts))
         && installed_version(Path::new("/Applications/T3 Code (Beta).app")).as_deref() == Some(ver)
 }
-fn activate_when_idle(ver: &str, timeout: &str) -> Result<()> {
-    let timeout_seconds: u64 = timeout.parse()?;
-    if timeout_seconds == 0 || timeout_seconds > drain::MAX_WAIT_SECONDS {
-        return Err(format!(
-            "--when-idle-timeout must be 1 to {} seconds",
-            drain::MAX_WAIT_SECONDS
-        )
-        .into());
-    }
-    let builds = home()?.join(".t3/builds").join(ver);
-    runtime(ver)?;
-    if fleet_already_active(&builds, ver) {
+/// Everything that activates comes through here, so a retry of an installed fleet changes nothing.
+fn activate_with(ver: &str, builds: &Path, helper: &str, activation: Activation) -> Result<()> {
+    if fleet_already_active(builds, ver) {
         println!("Fleet {ver} is already active; no host was changed.");
         return Ok(());
     }
-    let helper = prepare_helpers(ver)?;
+    let Some(timeout_seconds) = activation.idle_timeout else {
+        return activate_fleet(ver, builds, helper, activation.force);
+    };
     drain::install_signal_handlers();
     let local = drain::LocalHost::current("m5")?;
     let remotes: Vec<drain::RemoteHost> = remote_hosts()
         .iter()
         .map(|name| drain::RemoteHost {
             name,
-            helper: helper.clone(),
+            helper: helper.to_string(),
         })
         .collect();
     let mut hosts: Vec<&dyn drain::DrainHost> = vec![&local];
@@ -727,9 +997,10 @@ fn activate_when_idle(ver: &str, timeout: &str) -> Result<()> {
         &hosts,
         &owner,
         timeout_seconds,
+        activation.force,
         &drain::SystemClock,
         &drain::interrupted,
-        &mut || activate_fleet(ver, &builds, &helper),
+        &mut |force| activate_fleet(ver, builds, helper, force),
     )?;
     match end {
         drain::DrainEnd::Activated => Ok(()),
@@ -755,7 +1026,15 @@ fn cancel_when_idle() -> Result<()> {
         return Ok(());
     };
     drain::release_hold(&local.hold_path(), &owner)?;
-    println!("Cancelled {owner}. The waiting rollout releases the other hosts as it stops.");
+    // A dead rollout can't release the others, whose holds could otherwise last hours.
+    let ver = owner.split(':').nth(1).ok_or("Unexpected hold owner")?;
+    let helper = format!("/tmp/t3-fork-deploy-{ver}/target/release/t3-fork-deploy");
+    for host in remote_hosts() {
+        if let Err(error) = remote(host, &helper, &["host-release", "--owner", &owner]) {
+            eprintln!("{host}: hold not released, it will expire: {error}");
+        }
+    }
+    println!("Cancelled {owner}.");
     Ok(())
 }
 
@@ -770,7 +1049,7 @@ impl Drop for RestoreFile {
         }
     }
 }
-fn fleet(ver: &str, upstream: &str, stage_only: bool) -> Result<()> {
+fn fleet(ver: &str, upstream: &str, stage_only: bool, activation: Activation) -> Result<()> {
     runtime(ver)?;
     let connect = connect_build_environment()?;
     env::set_current_dir(root())?;
@@ -804,7 +1083,7 @@ fn fleet(ver: &str, upstream: &str, stage_only: bool) -> Result<()> {
     if base["dependencies"] != document["dependencies"] {
         return Err("Server dependencies differ from upstream runtime".into());
     }
-    if !stage_only {
+    if !stage_only && activation.idle_timeout.is_none() && !activation.force {
         idle()?;
     }
     for host in remote_hosts() {
@@ -954,7 +1233,7 @@ fn fleet(ver: &str, upstream: &str, stage_only: bool) -> Result<()> {
             ],
         )?;
     }
-    distribute(ver, &builds, stage_only)
+    distribute(ver, &builds, stage_only, activation)
 }
 
 fn ui(args: &BTreeMap<String, String>) -> Result<()> {
@@ -999,7 +1278,6 @@ fn ui(args: &BTreeMap<String, String>) -> Result<()> {
     let allowed = [
         "apps/web/src/",
         "apps/web/public/",
-        "apps/desktop/src/",
         "scripts/",
         "docs/",
         "native/fork-deploy/",
@@ -1020,7 +1298,14 @@ fn ui(args: &BTreeMap<String, String>) -> Result<()> {
     let source = if let Some(source) = args.get("built-client") {
         PathBuf::from(source)
     } else {
-        run("vp", &["run", "--filter", "@t3tools/web", "build"])?;
+        let status = Command::new("vp")
+            .args(["run", "--filter", "@t3tools/web", "build"])
+            .envs(connect_build_environment()?)
+            .env("APP_VERSION", ver)
+            .status()?;
+        if !status.success() {
+            return Err(format!("Web build failed: {status}").into());
+        }
         run(
             "node",
             &[
@@ -1063,6 +1348,10 @@ fn parse() -> Result<(String, BTreeMap<String, String>)> {
             return Err(format!("Expected flag, got {key}").into());
         }
         let key = key.trim_start_matches("--").to_string();
+        if ["force", "detach"].contains(&key.as_str()) {
+            flags.insert(key, String::new());
+            continue;
+        }
         if ![
             "version",
             "upstream-tag",
@@ -1099,17 +1388,20 @@ fn main() {
         };
         match action.as_str() {
             "ui" => ui(&flags),
-            "fleet" => match flags.get("when-idle-timeout") {
-                Some(timeout) => {
-                    fleet(get("version")?, get("upstream-tag")?, true)?;
-                    activate_when_idle(get("version")?, timeout)
+            "fleet" => {
+                let ver = get("version")?;
+                let activation = parse_activation(&flags)?;
+                if leave_t3_turn(ver, &flags)? {
+                    return Ok(());
                 }
-                None => fleet(get("version")?, get("upstream-tag")?, false),
-            },
-            "fleet-stage" => fleet(get("version")?, get("upstream-tag")?, true),
-            "fleet-activate" if flags.contains_key("when-idle-timeout") => {
-                activate_when_idle(get("version")?, get("when-idle-timeout")?)
+                fleet(ver, get("upstream-tag")?, false, activation)
             }
+            "fleet-stage" => fleet(
+                get("version")?,
+                get("upstream-tag")?,
+                true,
+                Activation::default(),
+            ),
             "fleet-activate-cancel" => cancel_when_idle(),
             "host-hold" => drain::LocalHost::current("host").and_then(|host| {
                 drain::acquire_hold(
@@ -1129,24 +1421,34 @@ fn main() {
             }
             "fleet-activate" => {
                 let ver = get("version")?;
-                let builds = home()?.join(".t3/builds").join(ver);
                 runtime(ver)?;
-                idle()?;
+                let activation = parse_activation(&flags)?;
+                if leave_t3_turn(ver, &flags)? {
+                    return Ok(());
+                }
+                let builds = home()?.join(".t3/builds").join(ver);
                 let helper = prepare_helpers(ver)?;
-                activate_fleet(ver, &builds, &helper)
+                activate_with(ver, &builds, &helper, activation)
             }
             "host-stage" => stage(get("version")?, Path::new(get("archive")?)),
-            "host-idle" => idle(),
-            "host-activate" => activate(get("version")?),
+            // A host a previous attempt already moved is not what a retry waits for.
+            "host-idle" => match flags.get("version") {
+                Some(ver) if service_on(ver)? => Ok(()),
+                _ => idle(),
+            },
+            "host-active" => {
+                println!("{}", Value::from(active_runs(&state_db()?)?));
+                Ok(())
+            }
+            "host-activate" => activate(get("version")?, flags.contains_key("force")),
             "host-verify" => verify(get("version")?),
-            "host-seed-cache" => seed_cache(Path::new(get("archive")?), get("platform")?),
             "hash" => {
                 println!("{}", digest(Path::new(get("archive")?))?);
                 Ok(())
             }
             "help" | "--help" => {
                 println!(
-                    "fork-deploy ui [--app PATH] [--base-dir PATH] [--built-client PATH]\nfork-deploy fleet --version VERSION --upstream-tag TAG\nfork-deploy fleet-stage --version VERSION --upstream-tag TAG\nfork-deploy fleet-activate --version VERSION\nFull fleet activation requires idle hosts; fleet-stage never activates; UI updates never restart servers.\nfork-deploy fleet|fleet-activate --when-idle-timeout SECONDS ...\nfork-deploy fleet-activate-cancel"
+                    "fork-deploy ui [--app PATH] [--base-dir PATH] [--built-client PATH]\nfork-deploy fleet --version VERSION --upstream-tag TAG [--when-idle-timeout SECONDS] [--force] [--detach]\nfork-deploy fleet-stage --version VERSION --upstream-tag TAG\nfork-deploy fleet-activate --version VERSION [--when-idle-timeout SECONDS] [--force] [--detach]\nfork-deploy fleet-activate-cancel\nWithout flags, activation refuses unless every host is idle. --when-idle-timeout pauses new turns and waits for idle; on timeout it allows turns again and switches nothing. --force interrupts what is still running, after the wait if given. --detach runs in the background so a T3 turn can start it and end. fleet-stage never activates; UI updates never restart servers."
                 );
                 Ok(())
             }
@@ -1165,8 +1467,11 @@ mod tests {
     #[test]
     fn a_host_already_on_the_version_keeps_its_service_definition() {
         let service = "ExecStart=/home/u/.t3/runtime/versions/1.2.3/t3 serve";
-        assert_eq!(service_for_version(service, "1.2.3").unwrap(), service);
-        assert_ne!(service_for_version(service, "1.2.4").unwrap(), service);
+        assert_eq!(
+            service_with_version(service, "1.2.3").unwrap(),
+            (service.to_string(), "1.2.3".to_string())
+        );
+        assert_ne!(service_with_version(service, "1.2.4").unwrap().0, service);
     }
     #[test]
     fn a_retry_treats_only_a_covering_receipt_as_already_active() {
@@ -1296,54 +1601,161 @@ mod tests {
         assert!(desktop_swap_needed(None, ver, true).is_err());
     }
     #[test]
-    fn idle_guard_reads_database_and_refuses_active_turns() {
-        let dir = temporary("idle");
-        let db = dir.join("state.sqlite");
-        run("sqlite3", &[s(&db), "CREATE TABLE orchestration_v2_projection_runs(status TEXT); INSERT INTO orchestration_v2_projection_runs VALUES ('completed');"]).unwrap();
-        idle_at(&db).unwrap();
-        let closed = dir.join("closed-wal.sqlite");
-        run("sqlite3", &[s(&closed), "PRAGMA journal_mode=WAL; CREATE TABLE orchestration_v2_projection_runs(status TEXT); INSERT INTO orchestration_v2_projection_runs VALUES ('running');"]).unwrap();
+    fn a_cleanly_closed_wal_database_still_reads() {
+        let dir = temporary("closed");
+        let db = run_database(&dir);
+        set_run(&db, "t", "running", "{}");
+        run("sqlite3", &[s(&db), "PRAGMA journal_mode=WAL;"]).unwrap();
         for suffix in ["-wal", "-shm"] {
-            let _ = fs::remove_file(format!("{}{suffix}", closed.display()));
+            let _ = fs::remove_file(format!("{}{suffix}", db.display()));
         }
         assert!(
-            idle_at(&closed)
+            idle_at(&db)
                 .unwrap_err()
                 .to_string()
                 .contains("1 active turns")
         );
+        fs::remove_dir_all(dir).unwrap();
+    }
+    fn run_database(dir: &Path) -> PathBuf {
+        let db = dir.join("statev2.sqlite");
+        run("sqlite3", &[s(&db), "CREATE TABLE orchestration_v2_projection_threads(thread_id TEXT, title TEXT, archived_at TEXT, deleted_at TEXT); CREATE TABLE orchestration_v2_projection_runs(thread_id TEXT, status TEXT, payload_json TEXT); INSERT INTO orchestration_v2_projection_threads VALUES ('t', 'Title', NULL, NULL), ('old', 'Archived', 'then', NULL); INSERT INTO orchestration_v2_projection_runs VALUES ('t', 'completed', '{}');"]).unwrap();
+        db
+    }
+    fn set_run(db: &Path, thread: &str, status: &str, payload: &str) {
         run(
             "sqlite3",
-            &[
-                s(&db),
-                "INSERT INTO orchestration_v2_projection_runs VALUES ('running');",
-            ],
+            &[s(db), &format!("DELETE FROM orchestration_v2_projection_runs; INSERT INTO orchestration_v2_projection_runs VALUES ('{thread}', '{status}', '{payload}');")],
         )
         .unwrap();
-        assert!(idle_at(&db).is_err());
+    }
+    #[test]
+    fn idle_guard_refuses_work_that_will_run_and_ignores_queues_that_cannot() {
+        let dir = temporary("idle");
+        let db = run_database(&dir);
+        idle_at(&db).unwrap();
+        for status in ["queued", "preparing", "starting", "running", "waiting"] {
+            set_run(&db, "t", status, "{}");
+            assert!(idle_at(&db).is_err(), "{status}");
+        }
+        let runs = active_runs(&db).unwrap();
+        assert_eq!(runs[0]["threadId"], "t");
+        assert_eq!(runs[0]["title"], "Title");
+        for (thread, payload) in [("t", r#"{"queueHeld":true}"#), ("old", "{}")] {
+            set_run(&db, thread, "queued", payload);
+            idle_at(&db).unwrap();
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+    struct FakeService {
+        db: PathBuf,
+        bad_version: &'static str,
+        log: std::cell::RefCell<Vec<String>>,
+    }
+    impl ServiceControl for FakeService {
+        fn stop(&self) -> Result<()> {
+            self.log.borrow_mut().push("stop".into());
+            Ok(())
+        }
+        fn start(&self) -> Result<()> {
+            self.log.borrow_mut().push("start".into());
+            Ok(())
+        }
+        fn verify(&self, ver: &str) -> Result<()> {
+            self.log.borrow_mut().push(format!("verify {ver}"));
+            if ver == self.bad_version {
+                // What a failed version's migrations leave behind.
+                run("sqlite3", &[s(&self.db), "CREATE TABLE migrated(x);"])?;
+                return Err("never came up".into());
+            }
+            Ok(())
+        }
+    }
+    fn switch_fixture(dir: &Path, db: &Path) -> SwitchPaths {
+        let service = dir.join("t3code.service");
+        fs::write(
+            &service,
+            "ExecStart=/h/.t3/runtime/versions/1.0.0-preview.20260101.1/t3 serve\n",
+        )
+        .unwrap();
+        let launcher = dir.join("t3");
+        std::os::unix::fs::symlink("/old/t3", &launcher).unwrap();
+        SwitchPaths {
+            service,
+            db: db.to_owned(),
+            backup: dir.join("backup"),
+            launcher,
+            runtime: PathBuf::from("/new"),
+        }
+    }
+    #[test]
+    fn a_version_that_never_comes_up_restores_service_link_and_database() {
+        let dir = temporary("rollback");
+        let db = run_database(&dir);
+        let paths = switch_fixture(&dir, &db);
+        let bad = "2.0.0-preview.20260101.1";
+        let control = FakeService {
+            db: db.clone(),
+            bad_version: bad,
+            log: Default::default(),
+        };
+        let error = switch_service(bad, &paths, &control)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("rolled back to 1.0.0-preview.20260101.1"),
+            "{error}"
+        );
+        assert!(
+            fs::read_to_string(&paths.service)
+                .unwrap()
+                .contains("1.0.0-preview.20260101.1")
+        );
+        assert!(!paths.backup.join("statev2.sqlite").exists());
+        assert_eq!(
+            fs::read_link(&paths.launcher).unwrap(),
+            Path::new("/old/t3")
+        );
         assert_eq!(
             output(
                 "sqlite3",
                 &[
                     "-readonly",
                     s(&db),
-                    "SELECT count(*) FROM orchestration_v2_projection_runs"
+                    "SELECT count(*) FROM sqlite_master WHERE name = 'migrated'"
                 ]
             )
             .unwrap(),
-            "2"
+            "0"
         );
-        for status in ["queued", "starting"] {
-            run(
-                "sqlite3",
-                &[
-                    s(&db),
-                    &format!("UPDATE orchestration_v2_projection_runs SET status = '{status}'"),
-                ],
-            )
-            .unwrap();
-            assert!(idle_at(&db).is_err());
-        }
+        assert_eq!(
+            *control.log.borrow(),
+            [
+                "stop",
+                "start",
+                &format!("verify {bad}"),
+                "stop",
+                "start",
+                "verify 1.0.0-preview.20260101.1"
+            ]
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn switching_to_the_running_version_only_restarts_and_verifies_so_retries_are_safe() {
+        let dir = temporary("retry");
+        let db = run_database(&dir);
+        let paths = switch_fixture(&dir, &db);
+        let control = FakeService {
+            db: db.clone(),
+            bad_version: "",
+            log: Default::default(),
+        };
+        switch_service("1.0.0-preview.20260101.1", &paths, &control).unwrap();
+        assert_eq!(
+            *control.log.borrow(),
+            ["start", "verify 1.0.0-preview.20260101.1"]
+        );
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]

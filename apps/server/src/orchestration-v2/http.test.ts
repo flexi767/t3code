@@ -99,10 +99,7 @@ const items = Schema.decodeUnknownSync(Schema.Array(OrchestrationV2TurnItem))(
 );
 
 // Serves the orchestration HTTP routes over real stores; `allowed` gates the read scope.
-const serveOrchestrationHttp = (
-  allowed: () => boolean,
-  scopes: ReadonlyArray<AuthEnvironmentScope> = ["orchestration:read"],
-) =>
+const serveOrchestrationHttp = (allowed: () => boolean) =>
   Effect.gen(function* () {
     const runtime = ProviderReplayHarness.layerWithRegistry(
       { name: "thread-transcript" },
@@ -150,7 +147,7 @@ const serveOrchestrationHttp = (
                 sessionId: AuthSessionId.make("test-session"),
                 subject: "test",
                 method: "bearer-access-token",
-                scopes: new Set<AuthEnvironmentScope>(allowed() ? scopes : []),
+                scopes: new Set<AuthEnvironmentScope>(allowed() ? ["orchestration:read"] : []),
               }),
             ),
           ),
@@ -186,34 +183,6 @@ it.effect("refuses thread migration to a read-only client", () =>
       ),
     );
     expect(response.status).toBe(403);
-  }),
-);
-
-it.effect("requires filesystem and source-control writes before preparing a move", () =>
-  Effect.gen(function* () {
-    for (const extra of ["filesystem:write", "source-control:write"] as const) {
-      const { handler } = yield* serveOrchestrationHttp(
-        () => true,
-        ["orchestration:read", "orchestration:operate", "filesystem:read", extra],
-      );
-      const response = yield* Effect.promise(() =>
-        handler(
-          new Request("http://localhost/api/orchestration/thread-move/export", {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              [ORCHESTRATION_PROTOCOL_HEADER]: ORCHESTRATION_PROTOCOL_VERSION_TEXT,
-            },
-            body: JSON.stringify({
-              threadId: thread.id,
-              transferId: "c39671d4-1603-4996-9b35-19ebce82fb41",
-              prepareRepository: true,
-            }),
-          }),
-        ),
-      );
-      expect(response.status).toBe(403);
-    }
   }),
 );
 

@@ -43,6 +43,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import {
   AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
   AuthSourceControlWriteScope,
   AuthFilesystemReadScope,
   type DesktopWslState,
@@ -1230,7 +1231,13 @@ function OpenCommandPaletteDialog(props: {
   };
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
-  if (activeThread && activeThreadServerConfig?.environment.capabilities.threadMove === true) {
+  if (
+    activeThread &&
+    activeThreadServerConfig?.environment.capabilities.threadMove === true &&
+    [AuthOrchestrationReadScope, AuthOrchestrationOperateScope, AuthFilesystemReadScope].every(
+      (scope) => readEnvironmentScope(activeThread.environmentId, scope),
+    )
+  ) {
     const ref = scopeThreadRef(activeThread.environmentId, activeThread.id);
     actionItems.push({
       kind: "action",

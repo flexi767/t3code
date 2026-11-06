@@ -120,6 +120,8 @@ interface GitActionsControlProps {
   compact?: boolean;
   showActions?: boolean;
   showChanges?: boolean;
+  /** False when gitCwd is not the thread's own checkout, so its branch says nothing about the thread. */
+  tracksThreadBranch?: boolean;
   onOpenChanges?: () => void;
   menuOnlyLabel?: string;
 }
@@ -932,6 +934,7 @@ export default function GitActionsControl({
   compact = false,
   showActions = true,
   showChanges = true,
+  tracksThreadBranch = true,
   onOpenChanges,
   menuOnlyLabel,
 }: GitActionsControlProps) {
@@ -984,6 +987,7 @@ export default function GitActionsControl({
     inlineSuccess?.scopeKey === successScopeKey && !inlineSuccessExpired ? inlineSuccess : null;
 
   const persistThreadBranchSync = (branch: string | null, manualSelection = false) => {
+    if (!tracksThreadBranch) return;
     if (!activeThreadRef) {
       return;
     }

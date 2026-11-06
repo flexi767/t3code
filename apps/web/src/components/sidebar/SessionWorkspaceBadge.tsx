@@ -18,7 +18,8 @@ function CheckoutDetails({
   cwd: string;
   heading: string;
   threadRef: ScopedThreadRef;
-  onOpenChanges: () => void;
+  // Absent for a checkout other than the thread's own: its diff panel shows only its own changes.
+  onOpenChanges?: () => void;
 }) {
   const query = useEnvironmentQuery(
     vcsEnvironment.status({
@@ -73,8 +74,9 @@ function CheckoutDetails({
               activeThreadRef={threadRef}
               menuOnlyLabel={behindLabel}
               showChanges={false}
+              tracksThreadBranch={onOpenChanges !== undefined}
             />
-            {status?.hasWorkingTreeChanges ? (
+            {status?.hasWorkingTreeChanges && onOpenChanges ? (
               <GitActionsControl
                 gitCwd={cwd}
                 activeThreadRef={threadRef}
@@ -124,7 +126,6 @@ export function SessionWorkspaceDetails({
           environmentId={thread.environmentId}
           cwd={workspaceRoot}
           threadRef={scopeThreadRef(thread.environmentId, thread.id)}
-          onOpenChanges={onOpenChanges}
           heading="Main checkout"
         />
       ) : null}
