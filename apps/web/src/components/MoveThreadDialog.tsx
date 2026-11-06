@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { selectThreadMoveTarget } from "./MoveThreadDialog.logic";
 import { useRouter } from "@tanstack/react-router";
 import { create } from "zustand";
 import {
@@ -11,8 +12,8 @@ import {
   type EnvironmentId,
 } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { useProjects, useServerConfigs, useThreadShell } from "../state/entities";
+import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { useProject, useProjects, useServerConfigs, useThreadShell } from "../state/entities";
 import { useEnvironments } from "../state/environments";
 import { readEnvironmentScope } from "../state/session";
 import { orchestrationEnvironment } from "../state/orchestration";
@@ -98,6 +99,9 @@ function MoveThreadDialog({
 }) {
   const router = useRouter();
   const thread = useThreadShell(threadRef);
+  const project = useProject(
+    thread ? scopeProjectRef(threadRef.environmentId, thread.projectId) : null,
+  );
   const configs = useServerConfigs();
   const targets = useThreadMoveTargets(threadRef.environmentId);
   const [destination, setDestination] = useState<string | null>(null);
@@ -105,11 +109,7 @@ function MoveThreadDialog({
   const [error, setError] = useState<string | null>(null);
   const [transferId] = useState(randomUUID);
   const move = useAtomCommand(orchestrationEnvironment.moveThread, { reportFailure: false });
-  const target =
-    targets.find((entry) => entry.key === destination) ??
-    (destinationEnvironmentId === null
-      ? targets[0]
-      : targets.find((entry) => entry.project.environmentId === destinationEnvironmentId));
+  const target = selectThreadMoveTarget(targets, destination, destinationEnvironmentId, project);
   const canMove =
     thread !== null &&
     thread.runtime?.activeRunId == null &&
@@ -182,6 +182,7 @@ function MoveThreadDialog({
             <div className="space-y-1.5">
               <Label htmlFor="thread-move-destination">Destination project</Label>
               <Select
+                items={targets.map((entry) => ({ value: entry.key, label: entry.label }))}
                 value={target?.key ?? null}
                 onValueChange={setDestination}
                 disabled={phase !== null}
