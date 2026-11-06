@@ -104,6 +104,9 @@ function layerExecutorFor(input: {
       ProviderSessionManager.ProviderSessionManagerV2,
       ProviderSessionManager.ProviderSessionManagerV2.of({
         shutdown: Effect.void,
+        heldThreadIds: Effect.succeed(new Set()),
+        adopt: () => Effect.die("unused"),
+        startAdopted: () => Effect.void,
         open: () => Effect.die("unused open"),
         get: () => Effect.succeedNone,
         isLive: () => Effect.succeed(false),
@@ -118,6 +121,7 @@ function layerExecutorFor(input: {
     Layer.succeed(
       ProviderTurnStartService.ProviderTurnStartServiceV2,
       ProviderTurnStartService.ProviderTurnStartServiceV2.of({
+        resumeHeld: () => Effect.void,
         start: () =>
           Effect.gen(function* () {
             yield* record("start");

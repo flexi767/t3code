@@ -379,6 +379,10 @@ export const CodexDriver: ProviderDriver<
       snapshotForCwd,
       consumeResetCredit,
       orchestrationAdapter,
+      holdable: {
+        createInput: { instanceId, displayName, accentColor, environment, enabled, config },
+        onUsageLimits: (update: never) => snapshot.applyUsageLimits(update),
+      },
       textGeneration,
     } satisfies ProviderInstance;
   }),

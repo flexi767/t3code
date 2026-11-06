@@ -217,6 +217,10 @@ export interface EffectOutboxV2Shape {
   readonly clearCancellation: (effectId: string) => Effect.Effect<void>;
   /** Resolves once the effect is neither pending nor running, or right away when it does not exist. */
   readonly awaitSettled: (effectId: string) => Effect.Effect<void, EffectOutboxError>;
+  /** A held thread's agent didn't die, so its controls stay deliverable after the restart. */
+  readonly keepEffectsOfHeldThreads: (
+    threadIds: ReadonlySet<ThreadId>,
+  ) => Effect.Effect<void, EffectOutboxError>;
   readonly reconcileAfterProcessLoss: Effect.Effect<
     { readonly requeued: number; readonly cancelled: number },
     EffectOutboxError
@@ -365,6 +369,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
         Effect.mapError((cause) => new EffectOutboxError({ operation, cause })),
       );
 
+    let heldThreadIds: ReadonlySet<ThreadId> = new Set();
     const service: EffectOutboxV2Shape = {
       enqueue: Effect.fn("EffectOutbox.enqueue")(
         function* (effects) {
@@ -484,6 +489,28 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
         }
         yield* signalSettled([effectId]);
       }),
+      keepEffectsOfHeldThreads: Effect.fn("EffectOutbox.keepEffectsOfHeldThreads")(
+        function* (threadIds) {
+          heldThreadIds = threadIds;
+          if (threadIds.size === 0) return;
+          const now = DateTime.formatIso(yield* DateTime.now);
+          yield* sql`
+            UPDATE orchestration_v2_effect_outbox
+            SET
+              status = 'pending',
+              lease_owner = NULL,
+              available_at = ${now},
+              updated_at = ${now},
+              last_error = 'Requeued for an agent that outlived the previous server process.'
+            WHERE status = 'running'
+              AND effect_type IN ${sql.in(PROCESS_BOUND_EFFECT_TYPES)}
+              AND thread_id IN ${sql.in([...threadIds])}
+          `;
+        },
+        Effect.mapError(
+          (cause) => new EffectOutboxError({ operation: "reconcile-process-loss", cause }),
+        ),
+      ),
       reconcileAfterProcessLoss: Effect.gen(function* () {
         const now = DateTime.formatIso(yield* DateTime.now);
         const cancelledRows = yield* sql<{ readonly effect_id: string }>`
@@ -496,6 +523,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
             last_error = 'Cancelled because the server process ended before the effect completed.'
           WHERE status IN ('pending', 'running')
             AND effect_type IN ${sql.in(PROCESS_BOUND_EFFECT_TYPES)}
+            ${heldThreadIds.size === 0 ? sql`` : sql`AND thread_id NOT IN ${sql.in([...heldThreadIds])}`}
           RETURNING effect_id
         `;
         const requeuedRows = yield* sql<{ readonly effect_id: string }>`

@@ -33,6 +33,8 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectionMaintenance from "./ProjectionMaintenance.ts";
 import * as ProjectStore from "./ProjectStore.ts";
+import * as AgentHolders from "../agentHolder/AgentHolders.ts";
+import * as HeldSessionRecovery from "./HeldSessionRecovery.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import * as ProviderContinuationService from "./ProviderContinuationService.ts";
@@ -58,6 +60,13 @@ import * as ThreadForkService from "./ThreadForkService.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+
+const layerAgentHolders = AgentHolders.layer.pipe(
+  Layer.provide(ProviderContinuationRequests.layer),
+);
+const layerAdapterRegistry = ProviderAdapterRegistry.layerFromProviderInstanceRegistry.pipe(
+  Layer.provide(layerAgentHolders),
+);
 
 export const layerEventInfrastructure = Layer.mergeAll(
   OrchestrationEventStore.layer,
@@ -125,7 +134,7 @@ const layerContextHandoffServiceProvided = ContextHandoffService.layer.pipe(
 );
 
 const layerProviderSwitchServiceProvided = ProviderSwitchService.layer.pipe(
-  Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
+  Layer.provide(layerAdapterRegistry),
 );
 
 const layerCommandOutputHubProvided = CommandOutputHub.layer.pipe(
@@ -136,7 +145,7 @@ const layerProviderSessionManagerProvided = ProviderSessionManager.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
       layerCommandOutputHubProvided,
-      ProviderAdapterRegistry.layerFromProviderInstanceRegistry,
+      layerAdapterRegistry,
       layerEventSink,
       IdAllocator.layer,
       layerProviderEventIngestorProvided,
@@ -224,7 +233,7 @@ const layerOrchestratorProvided = Orchestrator.layer.pipe(
       layerContextHandoffServiceProvided,
       IdAllocator.layer,
       ProjectStore.layer,
-      ProviderAdapterRegistry.layerFromProviderInstanceRegistry,
+      layerAdapterRegistry,
       // Reuse the continuation worker's layer reference so memoization shares one request queue.
       ProviderContinuationRequests.layer,
       layerProviderEventIngestorProvided,
@@ -338,6 +347,7 @@ const layerEffectWorkerProvided = EffectWorker.layer.pipe(
 const layerProviderRuntimeRecoveryProvided = ProviderRuntimeRecoveryService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
+      layerAgentHolders,
       layerEffectWorkerProvided,
       layerStores,
       layerEventSink,
@@ -358,7 +368,20 @@ const layerMcpAppRequestsProvided = McpAppRequests.layer.pipe(
   ),
 );
 
+const layerHeldSessionRecoveryProvided = HeldSessionRecovery.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      layerAgentHolders,
+      layerProviderSessionManagerProvided,
+      layerProviderTurnStartServiceProvided,
+      layerProviderRuntimeRecoveryProvided,
+      layerStores,
+    ),
+  ),
+);
+
 export const layer = Layer.mergeAll(
+  layerHeldSessionRecoveryProvided,
   layerCommandOutputHubProvided,
   layerOrchestratorProvided,
   layerMcpAppRequestsProvided,

@@ -280,6 +280,9 @@ it.effect(
         ProviderSessionManager.ProviderSessionManagerV2,
         ProviderSessionManager.ProviderSessionManagerV2.of({
           shutdown: Effect.void,
+          heldThreadIds: Effect.succeed(new Set()),
+          adopt: () => Effect.die("unused"),
+          startAdopted: () => Effect.void,
           open: () => Effect.die("unused open"),
           get: (providerSessionId) =>
             Effect.succeed(

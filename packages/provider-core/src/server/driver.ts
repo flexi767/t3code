@@ -50,6 +50,11 @@ export interface ProviderInstance {
     ProviderDriverError
   >;
   readonly orchestrationAdapter: ProviderAdapter.ProviderAdapterV2["Service"];
+  /** Present when sessions can run in the process that outlives server restarts. */
+  readonly holdable?: {
+    readonly createInput: Record<string, unknown>;
+    readonly onUsageLimits: (update: never) => Effect.Effect<void>;
+  };
   readonly textGeneration: ProviderTextGeneration;
   readonly auth?: ProviderAuthController;
   readonly acpSessionManagement?: {

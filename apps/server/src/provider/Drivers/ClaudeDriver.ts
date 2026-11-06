@@ -382,6 +382,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
           Effect.provideService(Path.Path, path),
         ),
       orchestrationAdapter,
+      holdable: {
+        createInput: { instanceId, displayName, accentColor, environment, enabled, config },
+        onUsageLimits: (update: never) => snapshot.applyUsageLimits(update),
+      },
       textGeneration,
       consumeResetCredit,
     } satisfies ProviderInstance;

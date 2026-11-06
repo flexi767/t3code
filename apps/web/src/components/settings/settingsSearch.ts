@@ -625,6 +625,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "keep-agents-running-across-restarts",
+    title: "Keep agents running across restarts",
+    to: "/settings/maintenance",
+    scope: "environment-defaults",
+    searchTerms: ["hold holder update restart agents running turns uninterrupted service"],
+  },
+  {
     id: "background-activity",
     title: "Background activity",
     to: "/settings/maintenance",

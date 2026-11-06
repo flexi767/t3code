@@ -249,7 +249,8 @@ fn active_runs(db: &Path) -> Result<Vec<Value>> {
         return Ok(Vec::new());
     }
     let open = sqlite_read_args(db);
-    let query = "SELECT r.thread_id AS threadId, t.title AS title, r.status AS status \
+    let query = "SELECT r.thread_id AS threadId, t.title AS title, r.status AS status, \
+         json_extract(t.payload_json, '$.lineage.parentThreadId') AS parentThreadId \
          FROM orchestration_v2_projection_runs AS r \
          LEFT JOIN orchestration_v2_projection_threads AS t ON t.thread_id = r.thread_id \
          WHERE r.status IN ('preparing','starting','running','waiting') \
@@ -265,7 +266,45 @@ fn active_runs(db: &Path) -> Result<Vec<Value>> {
     if text.is_empty() {
         return Ok(Vec::new());
     }
-    Ok(serde_json::from_str(&text)?)
+    let runs: Vec<Value> = serde_json::from_str(&text)?;
+    let held = held_threads(db);
+    Ok(runs
+        .into_iter()
+        .filter(|run| {
+            [&run["threadId"], &run["parentThreadId"]].iter().all(|id| {
+                !id.as_str()
+                    .is_some_and(|id| held.iter().any(|thread| thread == id))
+            })
+        })
+        .collect())
+}
+/// Threads whose agents run in a live holder keep running through a restart, so they aren't busy.
+fn held_threads(db: &Path) -> Vec<String> {
+    let Ok(entries) = db.with_file_name("agent-holders").read_dir() else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+        .filter_map(|entry| serde_json::from_slice::<Value>(&fs::read(entry.path()).ok()?).ok())
+        .filter(|holder| {
+            holder["pid"].as_u64().is_some_and(|pid| {
+                Command::new("kill")
+                    .args(["-0", &pid.to_string()])
+                    .stderr(Stdio::null())
+                    .status()
+                    .is_ok_and(|status| status.success())
+            })
+        })
+        .flat_map(|holder| {
+            holder["threadIds"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|id| id.as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 fn active_turns_at(db: &Path) -> Result<u64> {
     Ok(active_runs(db)?.len() as u64)
@@ -1601,6 +1640,24 @@ mod tests {
         assert!(desktop_swap_needed(None, ver, true).is_err());
     }
     #[test]
+    fn threads_in_a_live_holder_do_not_count_as_busy() {
+        let dir = temporary("held");
+        let db = run_database(&dir);
+        set_run(&db, "t", "running", "{}");
+        let holders = dir.join("agent-holders");
+        fs::create_dir(&holders).unwrap();
+        let dead = holders.join("999999.json");
+        fs::write(&dead, r#"{"pid":999999,"threadIds":["t"]}"#).unwrap();
+        assert!(idle_at(&db).is_err());
+        fs::write(
+            holders.join("self.json"),
+            json!({"pid": std::process::id(), "threadIds": ["t"]}).to_string(),
+        )
+        .unwrap();
+        idle_at(&db).unwrap();
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
     fn a_cleanly_closed_wal_database_still_reads() {
         let dir = temporary("closed");
         let db = run_database(&dir);
@@ -1619,7 +1676,7 @@ mod tests {
     }
     fn run_database(dir: &Path) -> PathBuf {
         let db = dir.join("statev2.sqlite");
-        run("sqlite3", &[s(&db), "CREATE TABLE orchestration_v2_projection_threads(thread_id TEXT, title TEXT, archived_at TEXT, deleted_at TEXT); CREATE TABLE orchestration_v2_projection_runs(thread_id TEXT, status TEXT, payload_json TEXT); INSERT INTO orchestration_v2_projection_threads VALUES ('t', 'Title', NULL, NULL), ('old', 'Archived', 'then', NULL); INSERT INTO orchestration_v2_projection_runs VALUES ('t', 'completed', '{}');"]).unwrap();
+        run("sqlite3", &[s(&db), "CREATE TABLE orchestration_v2_projection_threads(thread_id TEXT, title TEXT, archived_at TEXT, deleted_at TEXT, payload_json TEXT); CREATE TABLE orchestration_v2_projection_runs(thread_id TEXT, status TEXT, payload_json TEXT); INSERT INTO orchestration_v2_projection_threads VALUES ('t', 'Title', NULL, NULL, '{}'), ('old', 'Archived', 'then', NULL, '{}'); INSERT INTO orchestration_v2_projection_runs VALUES ('t', 'completed', '{}');"]).unwrap();
         db
     }
     fn set_run(db: &Path, thread: &str, status: &str, payload: &str) {

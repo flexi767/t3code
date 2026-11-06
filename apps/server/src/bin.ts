@@ -29,6 +29,9 @@ if (
       // Exit 2 identifies document rejections; OS and process failures remain retryable.
       process.exitCode = 2;
     }
+  } else if (command === "__agent-holder") {
+    const { runAgentHolder } = await import("./agentHolder/holderMain.ts");
+    await runAgentHolder(process.argv[3]!);
   } else if (command === "__managed-chatgpt-token") {
     const { runManagedChatGptTokenCli } = await import("./cli/managedChatGptToken.ts");
     await runManagedChatGptTokenCli(process.argv.slice(3));

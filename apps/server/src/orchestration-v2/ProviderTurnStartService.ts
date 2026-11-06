@@ -121,6 +121,14 @@ export interface ProviderTurnStartServiceV2Shape {
     readonly runId: RunId;
     readonly willRetry?: boolean;
   }) => Effect.Effect<void, ProviderTurnStartError>;
+  /** Picks a turn back up from a session that outlived the last server; starts nothing new. */
+  readonly resumeHeld: (input: {
+    readonly threadId: ThreadId;
+    readonly runId: RunId;
+    readonly session: ProviderAdapter.ProviderAdapterV2SessionRuntime;
+    readonly replay: ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event>;
+    readonly alreadyIngested: ReadonlySet<ProviderAdapter.ProviderAdapterV2Event>;
+  }) => Effect.Effect<void, ProviderTurnStartError>;
 }
 
 export class ProviderTurnStartServiceV2 extends Context.Service<
@@ -1730,7 +1738,106 @@ export const layer: Layer.Layer<
       });
     });
 
+    const resumeHeld: ProviderTurnStartServiceV2Shape["resumeHeld"] = Effect.fn(
+      "ProviderTurnStartService.resumeHeld",
+    )(
+      function* (input) {
+        const { runId } = input;
+        const projection = yield* projectionStore.getTurnStartContext(input.threadId, runId);
+        const run = projection.runs.find((candidate) => candidate.id === runId);
+        const rootNode = projection.nodes.find((candidate) => candidate.id === run?.rootNodeId);
+        const attempt = projection.attempts.find(
+          (candidate) => candidate.id === run?.activeAttemptId,
+        );
+        const providerThread = projection.providerThreads.find(
+          (candidate) => candidate.id === run?.providerThreadId,
+        );
+        const message = projection.messages.find(
+          (candidate) => candidate.id === run?.userMessageId,
+        );
+        const checkpointScope = projection.checkpointScopes.find(
+          (candidate) => candidate.id === rootNode?.checkpointScopeId,
+        );
+        if (
+          run === undefined ||
+          rootNode === undefined ||
+          attempt === undefined ||
+          providerThread === undefined ||
+          message === undefined ||
+          checkpointScope === undefined
+        ) {
+          return yield* new ProviderTurnStartError({
+            runId,
+            cause: `Run ${runId} is missing records needed to resume it.`,
+          });
+        }
+        const runControls = makeRunControls({
+          threadId: input.threadId,
+          runId,
+          attemptId: attempt.id,
+          providerThreadId: providerThread.id,
+          runOrdinal: run.ordinal,
+          inheritedBackgroundTurnItems: [],
+        });
+        const routableSubagents = projection.subagents.filter((subagent) =>
+          RunExecutionService.canRouteRelatedSubagent(subagent.status),
+        );
+        yield* runExecution.startRootRun({
+          commandId: CommandId.make(`command:effect:provider-turn.resume:${run.id}`),
+          appThread: projection.thread,
+          providerSessionId: input.session.providerSessionId,
+          session: input.session,
+          run,
+          rootNode,
+          checkpointScope,
+          providerThread,
+          attempt,
+          attemptId: attempt.id,
+          loadInheritedBackgroundTurnItems: runControls.loadInheritedBackgroundTurnItems,
+          relatedThreadIds: routableSubagents.flatMap((subagent) =>
+            subagent.childThreadId === null ? [] : [subagent.childThreadId],
+          ),
+          relatedProviderThreadIds: routableSubagents.flatMap((subagent) =>
+            subagent.providerThreadId === null ? [] : [subagent.providerThreadId],
+          ),
+          providerTurnOrdinal: Math.max(
+            1,
+            ...projection.providerTurns
+              .filter((turn) => turn.providerThreadId === providerThread.id)
+              .map((turn) => turn.ordinal),
+          ),
+          shouldFinalizeRun: runControls.shouldFinalizeRun,
+          hasUnpairedRunInterruptRequest: runControls.hasUnpairedRunInterruptRequest,
+          loadRunInterruptReason: runControls.loadRunInterruptReason,
+          message: {
+            messageId: message.id,
+            text: message.text,
+            attachments: message.attachments,
+            createdBy: message.createdBy,
+            creationSource: message.creationSource,
+          },
+          modelSelection: run.modelSelection,
+          // Only analytics reads this on resume: the turn already runs with its own policy.
+          runtimePolicy: {
+            runtimeMode: projection.thread.runtimeMode,
+            interactionMode: projection.thread.interactionMode,
+            cwd: projection.thread.worktreePath,
+          },
+          resume: { replay: input.replay, alreadyIngested: input.alreadyIngested },
+        });
+      },
+      (effect, input) =>
+        effect.pipe(
+          Effect.mapError((cause) =>
+            isProviderTurnStartError(cause)
+              ? cause
+              : new ProviderTurnStartError({ runId: input.runId, cause }),
+          ),
+        ),
+    );
+
     return ProviderTurnStartServiceV2.of({
+      resumeHeld,
       start: Effect.fn("ProviderTurnStartService.start")(
         function* (input) {
           // Storage cleanup removes worktrees under the same lease. Only startup

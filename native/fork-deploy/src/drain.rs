@@ -289,7 +289,7 @@ mod tests {
         sync::mpsc,
     };
 
-    const RUNS: &str = "CREATE TABLE orchestration_v2_projection_threads(thread_id TEXT, title TEXT, archived_at TEXT, deleted_at TEXT); CREATE TABLE orchestration_v2_projection_runs(thread_id TEXT, status TEXT, payload_json TEXT);";
+    const RUNS: &str = "CREATE TABLE orchestration_v2_projection_threads(thread_id TEXT, title TEXT, archived_at TEXT, deleted_at TEXT, payload_json TEXT); CREATE TABLE orchestration_v2_projection_runs(thread_id TEXT, status TEXT, payload_json TEXT);";
 
     struct FakeHost {
         name: &'static str,

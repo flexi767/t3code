@@ -77,6 +77,35 @@ reuse stable IDs and must work once the hold ends. Work an admitted turn depends
 open, since refusing it would fail that turn. An expired or unreadable hold counts as open
 so that a dead rollout cannot stop turns indefinitely.
 
+## Keeping agents alive across restarts
+
+With `keepAgentsRunningAcrossRestarts`, Claude and Codex sessions run in a detached
+[holder process](../../apps/server/src/agentHolder/holderMain.ts) that the server reaches over a
+Unix socket. The boundary is the adapter's session runtime rather than the provider's stdio:
+both adapters keep turn state in memory, and neither CLI can be re-attached mid-protocol, so
+holding only the child process would still lose the turn. Other providers stay in the server
+and use the recovery below.
+
+Recovery must never run on a thread a holder still owns, or two agents work in one worktree.
+[Reattachment](../../apps/server/src/orchestration-v2/HeldSessionRecovery.ts) therefore runs
+before recovery, and a session that can't prove its run reached the provider is stopped so that
+recovery has one owner. If a holder is unreachable, its threads take the normal recovery path.
+
+The run consumer's routing state lives only in memory, so the holder retains each session's
+events and a new consumer replays them. Events the last server finished rebuild state without
+being ingested; the rest ingest normally. Acknowledgement is at-least-once: a hard kill can
+re-ingest the last 100 ms, which converges because projections upsert. Retained snapshot events
+keep only their newest state, so a replay may skip intermediate states.
+
+Agents reach MCP through a [proxy in the holder](../../apps/server/src/agentHolder/mcpHoldingProxy.ts).
+Real CLIs fail a call made during the outage and stay disconnected, and Codex fixes its MCP URL
+at thread start, so the proxy holds requests the server never received and re-creates sessions
+the restarted server forgot. It never repeats a call whose response was cut, since the tool may
+have run. Credentials return from the holder at reattachment because the registry is in memory.
+
+Linux service stops kill the whole cgroup, so the holder starts through `systemd-run --scope`
+there. A holder doesn't use agent scopes: the server's startup sweep stops what is in its slice.
+
 ## Recovering interrupted threads
 
 Restart continuation is an environment-owned preference, on by default. A

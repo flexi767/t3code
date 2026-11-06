@@ -9,6 +9,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
+import * as AgentHolders from "../agentHolder/AgentHolders.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import { ProviderAdapterDriverCreateError } from "@t3tools/provider-core/server/adapterDriver";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
@@ -67,13 +68,25 @@ export const layerFromProviderInstanceRegistry: Layer.Layer<
   ProviderAdapterRegistryV2,
   Effect.gen(function* () {
     const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+    const holders = yield* AgentHolders.AgentHolders;
     return ProviderAdapterRegistryV2.of({
       get: Effect.fn("ProviderAdapterRegistryV2.get")(function (instanceId) {
         return instances.getInstance(instanceId).pipe(
           Effect.flatMap((instance) => {
             if (instance === undefined)
               return new ProviderAdapterRegistryLookupError({ instanceId });
-            const adapter = instance.orchestrationAdapter;
+            const adapter =
+              instance.holdable === undefined
+                ? instance.orchestrationAdapter
+                : holders.wrap(
+                    {
+                      instanceId,
+                      driver: instance.orchestrationAdapter.driver,
+                      createInput: instance.holdable.createInput,
+                      onUsageLimits: instance.holdable.onUsageLimits,
+                    },
+                    instance.orchestrationAdapter,
+                  );
             const auth = instance.auth;
             if (!auth) return Effect.succeed(adapter);
             return Effect.succeed({

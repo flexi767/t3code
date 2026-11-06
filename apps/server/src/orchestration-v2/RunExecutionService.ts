@@ -579,6 +579,15 @@ export interface RunExecutionServiceV2StartRootRunInput {
   readonly message: ProviderAdapter.ProviderAdapterV2TurnMessage;
   readonly modelSelection: ModelSelection;
   readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
+  /**
+   * The turn is already running in a session that outlived the last server. Rebuilds this
+   * consumer's state from what the session retained instead of starting a provider turn.
+   */
+  readonly resume?: {
+    readonly replay: ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event>;
+    /** Replayed events the last server finished; only this consumer's memory needs them. */
+    readonly alreadyIngested: ReadonlySet<ProviderAdapter.ProviderAdapterV2Event>;
+  };
 }
 
 export interface RunExecutionServiceV2Shape {
@@ -932,7 +941,7 @@ export const layer: Layer.Layer<
           );
           // Side chats share the parent's worktree; a snapshot would capture the parent's edits.
           yield* (
-            input.appThread.lineage.sideChat === true
+            input.appThread.lineage.sideChat === true || input.resume !== undefined
               ? Effect.void
               : checkpointService.captureBaseline({
                   scope: input.checkpointScope,
@@ -949,6 +958,7 @@ export const layer: Layer.Layer<
             ),
           );
           if (
+            input.resume === undefined &&
             input.shouldStartProviderTurn !== undefined &&
             !(yield* input.shouldStartProviderTurn())
           ) {
@@ -1017,7 +1027,7 @@ export const layer: Layer.Layer<
             ? {}
             : { restartContinuation: true }),
         } satisfies ProviderUsageAnalytics.ProviderTurnAnalyticsContext;
-        if (input.attempt.reason === "initial") {
+        if (input.attempt.reason === "initial" && input.resume === undefined) {
           yield* turnAnalytics.runStarted({
             runId: input.run.id,
             driver: input.providerThread.driver,
@@ -1322,7 +1332,12 @@ export const layer: Layer.Layer<
         // Ends once the root turn and the children it drives settle. Background commands such
         // as a dev server keep this consumer alive afterwards and must not pin preview focus.
         const endPreviewActivity = yield* previewAgentActivity.begin(input.run.threadId);
-        const providerEventFiber = yield* eventSubscription.events.pipe(
+        const alreadyIngested = input.resume?.alreadyIngested;
+        const providerEventFiber = yield* (
+          input.resume === undefined
+            ? eventSubscription.events
+            : Stream.concat(Stream.fromIterable(input.resume.replay), eventSubscription.events)
+        ).pipe(
           Stream.mapEffect((event) =>
             Effect.gen(function* () {
               const previous = yield* Ref.get(eventRouting);
@@ -1429,46 +1444,48 @@ export const layer: Layer.Layer<
                 if (event.type === "provider_turn.updated" && !nativeChildTurn) {
                   firstRootProviderTurnId ??= event.providerTurn.id;
                 }
-                const storedEvents = yield* providerEventIngestor.ingestNormalized({
-                  analyticsContext: nativeChildTurn
-                    ? {
-                        ...analyticsContext,
-                        origin: NATIVE_SUBAGENT_TURN_ORIGIN,
-                        segment: "native_child",
-                      }
-                    : {
-                        ...analyticsContext,
-                        segment:
-                          event.type === "provider_turn.updated" &&
-                          event.providerTurn.id !== firstRootProviderTurnId
-                            ? "continuation"
-                            : input.attempt.reason,
-                      },
-                  providerSessionId: input.providerSessionId,
-                  providerInstanceId: input.run.providerInstanceId,
-                  threadId: input.run.threadId,
-                  runId: input.run.id,
-                  nodeId: input.rootNode.id,
-                  event: deliveredEvent,
-                  ...(isRootProviderThreadUpdate
-                    ? rootTerminalAlreadySeen
-                      ? {
-                          writeIfProviderThreadOwner: {
-                            providerThreadId: input.providerThread.id,
-                            runId: input.run.id,
-                            activeAttemptId: input.attempt.id,
-                            expectedLastRunOrdinal: input.run.ordinal,
+                const storedEvents = alreadyIngested?.has(event)
+                  ? [deliveredEvent]
+                  : yield* providerEventIngestor.ingestNormalized({
+                      analyticsContext: nativeChildTurn
+                        ? {
+                            ...analyticsContext,
+                            origin: NATIVE_SUBAGENT_TURN_ORIGIN,
+                            segment: "native_child",
+                          }
+                        : {
+                            ...analyticsContext,
+                            segment:
+                              event.type === "provider_turn.updated" &&
+                              event.providerTurn.id !== firstRootProviderTurnId
+                                ? "continuation"
+                                : input.attempt.reason,
                           },
-                        }
-                      : {
-                          writeIfRunCurrent: {
-                            runId: input.run.id,
-                            activeAttemptId: input.attempt.id,
-                            expectedStatus: "running" as const,
-                          },
-                        }
-                    : {}),
-                });
+                      providerSessionId: input.providerSessionId,
+                      providerInstanceId: input.run.providerInstanceId,
+                      threadId: input.run.threadId,
+                      runId: input.run.id,
+                      nodeId: input.rootNode.id,
+                      event: deliveredEvent,
+                      ...(isRootProviderThreadUpdate
+                        ? rootTerminalAlreadySeen
+                          ? {
+                              writeIfProviderThreadOwner: {
+                                providerThreadId: input.providerThread.id,
+                                runId: input.run.id,
+                                activeAttemptId: input.attempt.id,
+                                expectedLastRunOrdinal: input.run.ordinal,
+                              },
+                            }
+                          : {
+                              writeIfRunCurrent: {
+                                runId: input.run.id,
+                                activeAttemptId: input.attempt.id,
+                                expectedStatus: "running" as const,
+                              },
+                            }
+                        : {}),
+                    });
                 storedEventCount = storedEvents.length;
                 if (
                   isRootProviderThreadUpdate &&
@@ -1520,8 +1537,9 @@ export const layer: Layer.Layer<
             }),
           ),
           // Also after events this run does not accept, such as a child handed to another run.
-          Stream.tap(() =>
+          Stream.tap(({ event }) =>
             Effect.gen(function* () {
+              yield* eventSubscription.processed?.(event) ?? Effect.void;
               if (yield* agentTurnsSettled) yield* endPreviewActivity;
             }),
           ),
@@ -1544,6 +1562,8 @@ export const layer: Layer.Layer<
                 });
               }
               yield* finalizeRootRun(terminal);
+              // Not at the terminal: subagents and background commands can outlast the root turn.
+              yield* eventSubscription.settled ?? Effect.void;
             }),
           ),
           // Server shutdown interrupts the subscription and leaves the run to
@@ -1677,6 +1697,13 @@ export const layer: Layer.Layer<
           }),
         );
         yield* touchMcpCredential;
+        if (input.resume !== undefined) {
+          yield* Fiber.await(providerEventFiber).pipe(
+            Effect.raceFirst(touchMcpCredential.pipe(Effect.delay("1 hour"), Effect.forever)),
+            Effect.forkDetach,
+          );
+          return;
+        }
         const appContext = (yield* mcpAppModelContext
           .forThread(input.run.threadId)
           .pipe(

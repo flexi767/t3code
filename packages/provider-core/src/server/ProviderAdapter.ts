@@ -548,6 +548,10 @@ export interface ProviderAdapterV2ForkThreadInput {
 export interface ProviderAdapterV2EventSubscription {
   readonly events: Stream.Stream<ProviderAdapterV2Event, ProviderAdapterV2Error>;
   readonly close: Effect.Effect<void>;
+  /** A consumer finished this event, so a session outliving the server need not resend it. */
+  readonly processed?: (event: ProviderAdapterV2Event) => Effect.Effect<void>;
+  /** This consumer is done with its run; if it was the last, retained events can go. */
+  readonly settled?: Effect.Effect<void>;
 }
 
 export interface ProviderAdapterV2HistoricalContext {

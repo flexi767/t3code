@@ -64,6 +64,11 @@ checks.
 Server updates restart the connection and can interrupt active agents and
 terminal commands. Saved threads, settings, and project files remain.
 
+**Settings → Maintenance → Keep agents running across restarts** is off by default.
+Turn it on and Claude and Codex turns keep running while the server restarts or updates,
+so nothing needs resuming. Sessions started before you turn it on aren't covered. A running
+agent also keeps working after you quit the app, until its turn ends.
+
 **Settings → Maintenance → Continue threads after restarts** is on by default.
 It resumes supported active threads after an update, crash, or machine
 restart. Changes are saved to connected environments that support this setting;

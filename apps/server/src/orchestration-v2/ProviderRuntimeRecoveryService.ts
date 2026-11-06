@@ -11,6 +11,7 @@ import {
   isOrchestrationV2WorkActive,
   ThreadId,
 } from "@t3tools/contracts";
+import * as AgentHolders from "../agentHolder/AgentHolders.ts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -181,6 +182,7 @@ function latestStartedRun(
 }
 
 export const make = Effect.gen(function* () {
+  const holders = yield* AgentHolders.AgentHolders;
   const settings = yield* ServerSettings.ServerSettingsService;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const eventSink = yield* EventSink.EventSinkV2;
@@ -824,7 +826,10 @@ export const make = Effect.gen(function* () {
     let closedRequests = 0;
     let retiredEffects = 0;
     const stoppedThisPass = new Map<string, RecoverySession>();
+    const held = yield* holders.heldThreadIds;
     for (const threadId of threadIds) {
+      // Its agent is still running in the holder; cancelling here would leave two owners of the turn.
+      if (held.has(threadId)) continue;
       const projection = yield* projections.getRuntimeRecoveryProjection(threadId).pipe(
         Effect.mapError(
           (cause) =>
@@ -850,7 +855,10 @@ export const make = Effect.gen(function* () {
       closedRequests += result.closedRequests;
       retiredEffects += result.retiredEffects;
     }
-    const outboxReconciliation = yield* outbox.reconcileAfterProcessLoss.pipe(
+    const outboxReconciliation = yield* (
+      held.size === 0 ? Effect.void : outbox.keepEffectsOfHeldThreads(held)
+    ).pipe(
+      Effect.andThen(outbox.reconcileAfterProcessLoss),
       Effect.mapError(
         (cause) => new ProviderRuntimeRecoveryError({ operation: "drain-outbox", cause }),
       ),
@@ -868,7 +876,9 @@ export const make = Effect.gen(function* () {
     const enabled = yield* settings.getSettings.pipe(Effect.orElseSucceed(() => null));
     if (!enabled) return;
     const threadIds = yield* projections.getRecoveryThreadIds("runtime");
+    const held = yield* holders.heldThreadIds;
     for (const threadId of threadIds) {
+      if (held.has(threadId)) continue;
       yield* Effect.gen(function* () {
         const projection = yield* projections.getRuntimeRecoveryProjection(threadId);
         if (

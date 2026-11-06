@@ -541,6 +541,10 @@ export function useSettingsRestore(onRestored?: () => void) {
     DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate
       ? ["Continue threads after restarts"]
       : []),
+    ...(settings.keepAgentsRunningAcrossRestarts !==
+    DEFAULT_UNIFIED_SETTINGS.keepAgentsRunningAcrossRestarts
+      ? ["Keep agents running across restarts"]
+      : []),
     ...(isBackgroundActivityDirty ? ["Background activity"] : []),
     ...(settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode
       ? ["New thread mode"]
@@ -658,6 +662,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       responseStreamingMode: DEFAULT_UNIFIED_SETTINGS.responseStreamingMode,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       continueThreadsAfterServerUpdate: DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate,
+      keepAgentsRunningAcrossRestarts: DEFAULT_UNIFIED_SETTINGS.keepAgentsRunningAcrossRestarts,
       backgroundActivity: DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
       backgroundActivityProfile: DEFAULT_UNIFIED_SETTINGS.backgroundActivityProfile,
       automaticGitFetchInterval: DEFAULT_UNIFIED_SETTINGS.automaticGitFetchInterval,
@@ -1967,6 +1972,43 @@ export function MaintenanceSettingsPanel() {
                 updateSettings({ continueThreadsAfterServerUpdate: Boolean(checked) })
               }
               aria-label="Continue threads after restarts"
+            />
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("keep-agents-running-across-restarts")}
+          serverScoped
+          settingKeys={["keepAgentsRunningAcrossRestarts"]}
+          description="Keep Claude and Codex turns running while this environment restarts or updates, instead of interrupting and resuming them. Agents also keep working after you quit the app, until their turn ends. New sessions use this after you turn it on."
+          status={
+            !hasServerTargets
+              ? "All selected connected environments must support keeping agents running."
+              : undefined
+          }
+          resetAction={
+            hasServerTargets &&
+            settings.keepAgentsRunningAcrossRestarts !==
+              DEFAULT_UNIFIED_SETTINGS.keepAgentsRunningAcrossRestarts ? (
+              <SettingResetButton
+                label="keep agents running across restarts"
+                onClick={() =>
+                  updateSettings({
+                    keepAgentsRunningAcrossRestarts:
+                      DEFAULT_UNIFIED_SETTINGS.keepAgentsRunningAcrossRestarts,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <ScopedSwitch
+              settingKeys={["keepAgentsRunningAcrossRestarts"]}
+              checked={settings.keepAgentsRunningAcrossRestarts}
+              disabled={!hasServerTargets}
+              onCheckedChange={(checked) =>
+                updateSettings({ keepAgentsRunningAcrossRestarts: Boolean(checked) })
+              }
+              aria-label="Keep agents running across restarts"
             />
           }
         />

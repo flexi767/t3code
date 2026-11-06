@@ -35,6 +35,7 @@ import * as EffectWorker from "./orchestration-v2/EffectWorker.ts";
 import * as LegacyV1ThreadImporter from "./orchestration-v2/legacy/LegacyV1ThreadImporter.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as ProviderRuntimeRecovery from "./orchestration-v2/ProviderRuntimeRecoveryService.ts";
+import * as HeldSessionRecovery from "./orchestration-v2/HeldSessionRecovery.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadLaunch from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
@@ -412,6 +413,7 @@ export const startEffectWorkerWithRelay = Effect.fn(
 const runOrderedV2StartupPhases = Effect.fn("serverRuntimeStartup.runOrderedV2StartupPhases")(
   function* <
     Import,
+    Held,
     Recovery,
     Bootstrap,
     ImportError,
@@ -428,12 +430,16 @@ const runOrderedV2StartupPhases = Effect.fn("serverRuntimeStartup.runOrderedV2St
     readonly importLegacyShells: Effect.Effect<Import, ImportError, ImportContext>;
     readonly recover: Effect.Effect<Recovery, RecoveryError, RecoveryContext>;
     readonly recoverDelegatedTasks: Effect.Effect<void, DelegationError, DelegationContext>;
+    readonly reattachHeldSessions: Effect.Effect<Held>;
+    readonly resumeHeldRuns: (held: Held) => Effect.Effect<void>;
     readonly startEffectWorker: Effect.Effect<void, WorkerError, WorkerContext>;
     readonly autoBootstrap: Effect.Effect<Bootstrap, BootstrapError, BootstrapContext>;
   }) {
     yield* input.importLegacyShells;
+    const held = yield* input.reattachHeldSessions;
     const recovery = yield* input.recover;
     yield* input.recoverDelegatedTasks;
+    yield* input.resumeHeldRuns(held);
     yield* input.startEffectWorker;
     const bootstrap = yield* input.autoBootstrap;
     return { recovery, bootstrap } as const;
@@ -447,6 +453,7 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
   const providerRuntimeRecovery = yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
+  const heldSessionRecovery = yield* HeldSessionRecovery.HeldSessionRecovery;
   const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
   const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -472,6 +479,7 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
       if (workerFiber !== null) {
         yield* Fiber.interrupt(workerFiber).pipe(Effect.ignore);
       }
+      yield* heldSessionRecovery.markForShutdown;
       yield* providerRuntimeRecovery.prepareForShutdown.pipe(
         Effect.ensuring(providerSessions.shutdown),
       );
@@ -541,6 +549,8 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
           ),
         ),
       ),
+      reattachHeldSessions: heldSessionRecovery.reattach,
+      resumeHeldRuns: heldSessionRecovery.resume,
       recover: runStartupPhase("orchestration-v2.recovery", providerRuntimeRecovery.recover),
       recoverDelegatedTasks: runStartupPhase(
         "orchestration-v2.delegated-tasks.recover",

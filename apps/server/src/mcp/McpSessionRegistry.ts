@@ -27,7 +27,10 @@ export interface McpIssuedCredential {
 }
 
 export interface McpSessionRegistryShape {
+  readonly endpoint: Effect.Effect<string>;
   readonly issue: (request: McpCredentialRequest) => Effect.Effect<McpIssuedCredential>;
+  /** A credential issued by an earlier server process, still held by an agent that outlived it. */
+  readonly restore: (config: McpProviderSession.McpProviderSessionConfig) => Effect.Effect<void>;
   readonly resolve: (
     rawToken: string,
   ) => Effect.Effect<McpInvocationContext.McpThreadInvocationScope | undefined>;
@@ -139,6 +142,31 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
     },
   );
 
+  const restore: McpSessionRegistryShape["restore"] = Effect.fn("McpSessionRegistry.restore")(
+    function* (config) {
+      const issuedAt = yield* currentTimeMillis;
+      const tokenHash = yield* hashToken(config.authorizationHeader.replace(/^Bearer\s+/, ""));
+      const scope: McpInvocationContext.McpThreadInvocationScope = {
+        environmentId,
+        requestNamespace: config.providerSessionId,
+        thread: {
+          threadId: config.threadId,
+          providerSessionId: config.providerSessionId,
+          providerInstanceId: config.providerInstanceId,
+          subagent: false,
+        },
+        client: undefined,
+        capabilities: new Set(
+          (config.capabilities ?? []) as Iterable<McpInvocationContext.McpCapability>,
+        ),
+        issuedAt,
+      };
+      yield* SynchronizedRef.update(state, ({ records }) => ({
+        records: new Map(records).set(tokenHash, { tokenHash, scope, lastAliveAt: issuedAt }),
+      }));
+    },
+  );
+
   const resolve: McpSessionRegistryShape["resolve"] = Effect.fn("McpSessionRegistry.resolve")(
     function* (rawToken) {
       if (rawToken.length === 0) return undefined;
@@ -177,7 +205,9 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
     }));
 
   return McpSessionRegistry.of({
+    endpoint: Effect.succeed(endpoint),
     issue,
+    restore,
     resolve,
     touch,
     revokeProviderSession: Effect.fn("McpSessionRegistry.revokeProviderSession")(

@@ -74,6 +74,19 @@ activator reruns every 10 seconds, even after it succeeds, and each rerun can qu
 If M3 is unreachable, `T3CODE_FLEET_SKIP_M3=1` rolls out to M5 and J only. The desktop
 cannot connect to M3 until a later rollout, with a new version, reaches it.
 
+## Keeping agents running through a switch
+
+With **Keep agents running across restarts** on (Settings → Maintenance, per host, off by
+default), Claude and Codex sessions run in a separate holder process, so a restart no longer
+interrupts their turns. Threads on a live holder don't count as busy, so plain `fleet` and
+`fleet-activate` switch without waiting for them, and `--force` doesn't list them as
+interrupted. Other providers still need one of the options above.
+
+Holders are registered under `<state dir>/agent-holders/`. A holder from an older version
+finishes the turn it has and exits; the next turn opens on the new version. A held agent can
+outlive `t3 service stop` or quitting the app: it finishes its turn, and the holder exits after
+30 quiet minutes with no server. To stop one now, send SIGTERM to the pid in its file.
+
 ## Failure and rollback
 
 A server host that doesn't report the new version within five minutes is rolled
