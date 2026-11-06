@@ -2532,6 +2532,54 @@ it.effect("a first send during a hold leaves only the draft, whichever command r
   }),
 );
 
+it.effect(
+  "a client unaware of the thread a mid-launch hold left can retry with a new command",
+  () =>
+    Effect.gen(function* () {
+      const answers = [false, true];
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const threadId = ThreadId.make("thread:held:race-new-id");
+        const send = (command: string) =>
+          launchInput({ command, thread: threadId, message: "draft text" });
+        yield* launches.launch(send("command:held:race-first")).pipe(Effect.flip);
+        assert.lengthOf((yield* threads.getThreadProjection(threadId)).messages, 0);
+
+        const retry = "command:held:race-retry";
+        assert.isFalse((yield* launches.launch(send(retry))).resumed);
+        yield* preparationSettled(threadId);
+        const once = { messages: ["draft text"], runs: 1, turnStarts: 1 };
+        assert.deepEqual(yield* firstSendState(threadId, retry), once);
+
+        // The thread has work now: a further new launch must not add a turn.
+        const late = yield* launches.launch(send("command:held:race-late")).pipe(Effect.flip);
+        assert.include(userFacingDispatchErrorMessage(late), "already exists");
+        assert.deepEqual(yield* firstSendState(threadId, retry), once);
+      }).pipe(Effect.provide(admissionHarness(Effect.sync(() => answers.shift() ?? false))));
+    }),
+);
+
+it.effect("the original command cannot add a turn after a new command won the thread", () =>
+  Effect.gen(function* () {
+    const answers = [false, true];
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const threadId = ThreadId.make("thread:held:race-both");
+      const send = (command: string) =>
+        launchInput({ command, thread: threadId, message: "draft text" });
+      yield* launches.launch(send("command:held:both-first")).pipe(Effect.flip);
+      yield* launches.launch(send("command:held:both-winner"));
+      const loser = yield* launches.launch(send("command:held:both-first")).pipe(Effect.exit);
+      assert.isTrue(Exit.isFailure(loser));
+      const projection = yield* threads.getThreadProjection(threadId);
+      assert.lengthOf(projection.messages, 1);
+      assert.lengthOf(projection.runs, 1);
+    }).pipe(Effect.provide(admissionHarness(Effect.sync(() => answers.shift() ?? false))));
+  }),
+);
+
 it.effect("a hold that starts during a first send leaves a thread the same command recovers", () =>
   Effect.gen(function* () {
     // The launch checks once before creating the thread and the commit checks again.

@@ -73,7 +73,10 @@ counts active runs, and every later commit sees the hold. Checking outside the t
 would let a turn start after the count reported idle.
 
 A launch checks the hold before creating its thread, so a refused first send leaves only
-the client's draft and any later retry can create the thread. A held command writes no rejection receipt, because scheduled and limit-recovery commands
+the client's draft and any later retry can create the thread. A hold that starts just after the
+thread is created leaves it empty, and a client that has not heard about it may retry with a
+new command. That launch adopts the empty thread, and a launch's first message is refused
+unless the thread is still empty, so only one attempt can start a turn. A held command writes no rejection receipt, because scheduled and limit-recovery commands
 reuse stable IDs and must work once the hold ends. Work an admitted turn depends on stays
 open, since refusing it would fail that turn. An expired or unreadable hold counts as open
 so that a dead rollout cannot stop turns indefinitely.

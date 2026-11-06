@@ -3151,6 +3151,8 @@ export const OrchestrationV2Command = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("message.dispatch"),
+    /** Refused unless the thread has no messages or runs, so a launch's first send starts once. */
+    onlyIfThreadEmpty: Schema.optional(Schema.Boolean),
     notification: Schema.optional(OrchestrationV2Notification),
     /** Sends this pending guest message; the server uses the guest's text, not `text`. */
     guestMessageId: Schema.optional(GuestMessageId),

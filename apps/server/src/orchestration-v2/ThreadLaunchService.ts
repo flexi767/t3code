@@ -261,6 +261,35 @@ const make = Effect.gen(function* () {
     }
   });
 
+  // A hold can start after a first send creates its thread, and the client may not know about
+  // that thread when it retries with a new command. Only an untouched top-level thread qualifies.
+  const canAdoptEmptyThread = Effect.fn("ThreadLaunchService.canAdoptEmptyThread")(function* (
+    input: ThreadLaunchInput,
+    threadId: ThreadId,
+  ) {
+    if (
+      input.createdBy !== "user" ||
+      (yield* threads
+        .getThreadShell(threadId)
+        .pipe(Effect.mapError(mapError(input, "create-thread", threadId)))) === null
+    )
+      return false;
+    const { thread, runs } = yield* threads
+      .getThreadRecords(threadId, ["runs"])
+      .pipe(Effect.mapError(mapError(input, "create-thread", threadId)));
+    return (
+      thread.projectId === input.projectId &&
+      thread.archivedAt === null &&
+      thread.deletedAt === null &&
+      thread.lineage.parentThreadId === null &&
+      thread.linkOrigin === undefined &&
+      runs.length === 0 &&
+      (yield* threads
+        .getMessageCount(threadId)
+        .pipe(Effect.mapError(mapError(input, "create-thread", threadId)))) === 0
+    );
+  });
+
   const checkWorktreeBase: ThreadLaunchService["Service"]["checkWorktreeBase"] = Effect.fn(
     "ThreadLaunchService.checkWorktreeBase",
   )(function* (input) {
@@ -924,8 +953,17 @@ const make = Effect.gen(function* () {
           yield* validateReusableThread(input, candidateThreadId);
         }
 
+        const adoptsEmptyThread =
+          input.reuseExistingThread !== true &&
+          input.threadId !== undefined &&
+          input.initialMessage !== undefined &&
+          Option.isNone(launchReceipt) &&
+          (yield* canAdoptEmptyThread(input, candidateThreadId));
+
         const workspaceStrategy: ThreadLaunchWorkspaceStrategy =
-          input.workspaceStrategy.type === "root" && Option.isNone(launchReceipt)
+          input.workspaceStrategy.type === "root" &&
+          Option.isNone(launchReceipt) &&
+          !adoptsEmptyThread
             ? Option.match(
                 yield* managedFolders
                   .folderForThread({
@@ -944,7 +982,7 @@ const make = Effect.gen(function* () {
         const initialWorktreePath =
           workspaceStrategy.type === "existing_worktree" ? workspaceStrategy.worktreePath : null;
         const claimDispatch =
-          input.reuseExistingThread === true
+          input.reuseExistingThread === true || adoptsEmptyThread
             ? threads.dispatch({
                 type: "thread.metadata.update",
                 commandId: input.commandId,
@@ -976,7 +1014,9 @@ const make = Effect.gen(function* () {
           Effect.mapError(
             mapError(
               input,
-              input.reuseExistingThread === true ? "update-thread" : "create-thread",
+              input.reuseExistingThread === true || adoptsEmptyThread
+                ? "update-thread"
+                : "create-thread",
               candidateThreadId,
             ),
           ),
@@ -1003,6 +1043,7 @@ const make = Effect.gen(function* () {
             .dispatch({
               type: "message.dispatch",
               commandId: messageCommandId,
+              onlyIfThreadEmpty: true,
               threadId,
               messageId,
               text: input.initialMessage.text,
@@ -1058,7 +1099,7 @@ const make = Effect.gen(function* () {
         const shouldSchedule = runId === null ? Option.isNone(launchReceipt) : runIsPreparing;
         const boundWorktreePath = projection.thread.worktreePath;
         const preparationStrategy: ThreadLaunchWorkspaceStrategy =
-          Option.isSome(launchReceipt) &&
+          (Option.isSome(launchReceipt) || adoptsEmptyThread) &&
           workspaceStrategy.type === "root" &&
           boundWorktreePath !== null
             ? {
