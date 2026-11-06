@@ -4,6 +4,7 @@ import {
   MessageId,
   EventId,
   NodeId,
+  type OrchestrationV2ServerCommand,
   type OrchestrationV2DomainEvent,
   PlanId,
   ProjectId,
@@ -15,6 +16,7 @@ import {
   RunAttemptId,
   RunId,
   RuntimeRequestId,
+  type ScheduledTaskId,
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
@@ -39,6 +41,8 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
+import * as TurnAdmission from "./TurnAdmission.ts";
+import { userFacingDispatchErrorMessage } from "./UserFacingErrors.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
 const instanceId = ProviderInstanceId.make("codex");
@@ -61,6 +65,123 @@ const layerTest = Layer.mergeAll(
     { databaseLayer: layerDatabase, runEffectWorker: false },
   ),
 );
+
+const heldAdmissionLayer = Layer.mergeAll(
+  layerDatabase,
+  ProjectionStore.layer.pipe(Layer.provide(layerDatabase)),
+  ProviderReplayHarness.layerWithRegistry(
+    { name: "admission-hold" },
+    ProviderAdapterRegistry.layerFromAdapters([adapter]),
+    { databaseLayer: layerDatabase, runEffectWorker: false },
+  ).pipe(
+    Layer.provide(
+      Layer.effect(
+        TurnAdmission.TurnAdmission,
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          return {
+            // The marker write proves this check shares the commit's rolled-back transaction.
+            isHeld: sql`SELECT value FROM admission_hold_probe`.pipe(
+              Effect.flatMap((rows) =>
+                rows.length === 0
+                  ? Effect.succeed(false)
+                  : sql`INSERT INTO admission_hold_probe (value) VALUES ('inside')`.pipe(
+                      Effect.as(true),
+                    ),
+              ),
+              Effect.orDie,
+            ),
+          };
+        }),
+      ),
+    ),
+    Layer.provide(layerDatabase),
+  ),
+);
+
+it.effect("holds new turns without a receipt so the same command works afterwards", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const threadId = ThreadId.make("admission:thread");
+    yield* sql`CREATE TABLE admission_hold_probe (value TEXT)`;
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("admission:create"),
+      threadId,
+      projectId: ProjectId.make("admission:project"),
+      title: "Held",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const send = {
+      type: "message.dispatch",
+      commandId: CommandId.make("admission:send"),
+      threadId,
+      messageId: MessageId.make("admission:message"),
+      text: "Start",
+      attachments: [],
+      modelSelection,
+      dispatchMode: { type: "start_immediately" },
+      createdBy: "user",
+      creationSource: "web",
+    } as const;
+    yield* sql`INSERT INTO admission_hold_probe (value) VALUES ('held')`;
+    const refused = yield* orchestrator.dispatch(send).pipe(Effect.flip);
+    assert.instanceOf(refused, Orchestrator.OrchestratorTurnAdmissionHeldError);
+    assert.include(userFacingDispatchErrorMessage(refused), "new turns are paused");
+    assert.deepEqual(yield* sql`SELECT value FROM admission_hold_probe`, [{ value: "held" }]);
+    assert.lengthOf((yield* projections.getThreadProjection(threadId)).runs, 0);
+    yield* sql`DELETE FROM admission_hold_probe`;
+    yield* orchestrator.dispatch(send);
+    assert.lengthOf((yield* projections.getThreadProjection(threadId)).runs, 1);
+  }).pipe(Effect.provide(heldAdmissionLayer)),
+);
+
+it("holds only new work, never what an admitted turn depends on", () => {
+  const send = {
+    type: "message.dispatch",
+    commandId: CommandId.make("admission:table"),
+    threadId: ThreadId.make("admission:table"),
+    messageId: MessageId.make("admission:table"),
+    text: "Start",
+    attachments: [],
+    dispatchMode: { type: "start_immediately" },
+    createdBy: "user",
+    creationSource: "web",
+  } as const;
+  const runCreated = [{ type: "run.created" }] as const;
+  const parentRunId = RunId.make("admission:run");
+  for (const [command, events, expected] of [
+    [send, runCreated, true],
+    [{ ...send, scheduledTaskId: "task" as ScheduledTaskId }, runCreated, true],
+    [{ ...send, usageLimitContinuationOfRunId: parentRunId }, runCreated, true],
+    [send, [{ type: "message.updated" }], false],
+    [{ ...send, senderThreadId: send.threadId }, runCreated, false],
+    [{ ...send, restartContinuationOfRunId: parentRunId }, runCreated, false],
+    [
+      { ...send, delegatedCompletion: { parentRunId, generation: 1, taskIds: [] } },
+      runCreated,
+      false,
+    ],
+    [{ ...send, creationSource: "provider" }, runCreated, false],
+    [{ ...send, commandId: CommandId.make("command:steer-follow-up:1") }, runCreated, false],
+  ] as const) {
+    assert.equal(
+      TurnAdmission.startsNewWork(command as OrchestrationV2ServerCommand, events as never),
+      expected,
+    );
+  }
+  assert.isTrue(TurnAdmission.holdIsActive('{"expiresAtMs":101}', 100));
+  assert.isFalse(TurnAdmission.holdIsActive('{"expiresAtMs":100}', 100));
+  assert.isFalse(TurnAdmission.holdIsActive("not json", 100));
+});
 
 it.effect(
   "retires a moved set atomically and keeps every source when a child revision changes",

@@ -34,6 +34,20 @@ That file contains public build configuration, not login credentials. Missing
 values fail before building: a signed app without them can run locally while
 silently leaving every phone unable to connect after a restart.
 
+To update while agents are working, add `--when-idle-timeout SECONDS` (up to four hours)
+to `fleet` or `fleet-activate`. It stages if needed, pauses new turns on every host, waits
+for running turns, and switches only when all hosts are idle. Running turns are never
+stopped, and their child tasks, wakes and steers still work. New sends are refused with a
+message saying so, and due scheduled tasks wait.
+
+A timeout, Ctrl+C, or `scripts/fork-deploy fleet-activate-cancel` from another terminal
+allows turns again without switching anything. If the rollout itself dies, each host's
+hold expires by itself up to 15 minutes after the timeout. Retrying with the same version
+is safe: an installed fleet is left alone. To retry after a failed `fleet`, use
+`fleet-activate`, since `fleet` needs a new version. A host only enforces the pause once
+it runs a build that has it, so the first rollout to that build still needs an idle check
+at switch time.
+
 To prepare a repair while agents are working, use `fleet-stage` with the same
 version/upstream flags. It builds and stages all three hosts without activation.
 When all hosts are idle, run `scripts/fork-deploy fleet-activate --version VERSION`

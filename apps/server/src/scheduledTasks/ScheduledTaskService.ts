@@ -54,6 +54,7 @@ import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as DueHint from "../scheduling/DueHint.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
+import * as TurnAdmission from "../orchestration-v2/TurnAdmission.ts";
 import { isMissedFixedTimeRun, isSameSchedule, nextScheduledRunAt } from "./Schedule.ts";
 import {
   redactHeaders,
@@ -441,6 +442,7 @@ export const layer = Layer.effect(
     const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
     const secretRequests = yield* SecretRequests.SecretRequests;
     const scheduler = yield* Scheduler.Scheduler;
+    const turnAdmission = yield* TurnAdmission.TurnAdmission;
     const readWebhookOrigin = yield* ScheduledTaskWebhookOrigin;
     const managedPolicy = yield* ManagedPolicy.ManagedPolicy;
     const webhookPolicyOrganization = ManagedPolicy.deniedBy(managedPolicy, "webhookTasks");
@@ -1080,6 +1082,8 @@ export const layer = Layer.effect(
       const now = yield* localNow;
       const nowMs = DateTime.toEpochMillis(now);
       if (yield* dueTasks.isIdle(nowMs)) return;
+      // Stays due: the next sweep after the hold ends runs it instead of recording a failure.
+      if (yield* turnAdmission.isHeld) return;
       const readVersion = yield* dueTasks.version;
       const [next] = yield* sql<{ next_run_at: string | null }>`
         SELECT MIN(next_run_at) AS next_run_at FROM scheduled_tasks

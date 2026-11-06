@@ -152,6 +152,7 @@ import {
   runtimeModeCeilingRefusal,
   threadsStartingWork,
 } from "./DispatchModeLimit.ts";
+import * as TurnAdmission from "./TurnAdmission.ts";
 import {
   applyToProjection,
   emptyProjection,
@@ -225,6 +226,17 @@ export class OrchestratorCommandRejectedError extends Schema.TaggedError<Orchest
 ) {
   override get message(): string {
     return `Orchestration command ${this.commandType} (${this.commandId}) was rejected before commit.`;
+  }
+}
+
+const isTurnAdmissionHeldError = Schema.is(TurnAdmission.TurnAdmissionHeldError);
+
+export class OrchestratorTurnAdmissionHeldError extends Schema.TaggedError<OrchestratorTurnAdmissionHeldError>()(
+  "OrchestratorTurnAdmissionHeldError",
+  { commandId: CommandId, commandType: Schema.String },
+) {
+  override get message(): string {
+    return new TurnAdmission.TurnAdmissionHeldError().message;
   }
 }
 
@@ -355,6 +367,7 @@ export const OrchestratorV2Error = Schema.Union([
   OrchestratorSubagentThreadReadOnlyError,
   OrchestratorThreadAboveModeLimitError,
   OrchestratorRuntimeModeAboveCeilingError,
+  OrchestratorTurnAdmissionHeldError,
 ]);
 export type OrchestratorV2Error = typeof OrchestratorV2Error.Type;
 
@@ -1028,6 +1041,7 @@ function lastDeliveredRunForProviderThread(
 
 const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(function* () {
   const checkpointService = yield* CheckpointServiceV2;
+  const turnAdmission = yield* TurnAdmission.TurnAdmission;
   const commandPolicy = yield* CommandPolicyV2;
   const contextHandoffService = yield* ContextHandoffServiceV2;
   const eventSink = yield* EventSinkV2;
@@ -13770,15 +13784,29 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(plan.updateDelegatedCompletionOnlyRunId === undefined
           ? {}
           : { updateDelegatedCompletionOnlyRunId: plan.updateDelegatedCompletionOnlyRunId }),
+        ...(TurnAdmission.startsNewWork(command, plan.events)
+          ? {
+              assertAdmitted: turnAdmission.isHeld.pipe(
+                Effect.flatMap((held) =>
+                  held ? Effect.fail(new TurnAdmission.TurnAdmissionHeldError()) : Effect.void,
+                ),
+              ),
+            }
+          : {}),
       })
       .pipe(
-        Effect.mapError(
-          (cause) =>
-            new OrchestratorDispatchError({
-              commandId: command.commandId,
-              commandType: command.type,
-              cause,
-            }),
+        Effect.mapError((cause) =>
+          // No receipt: stable command IDs must still work once the hold ends.
+          isTurnAdmissionHeldError(cause.cause)
+            ? new OrchestratorTurnAdmissionHeldError({
+                commandId: command.commandId,
+                commandType: command.type,
+              })
+            : new OrchestratorDispatchError({
+                commandId: command.commandId,
+                commandType: command.type,
+                cause,
+              }),
         ),
       );
 

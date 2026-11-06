@@ -62,6 +62,7 @@ import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadMoveService from "./ThreadMoveService.ts";
+import * as TurnAdmission from "./TurnAdmission.ts";
 import { movedId as movedThreadId } from "./threadMove.ts";
 import { threadHtmlRenderAttachmentIds } from "../attachmentStore.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -2407,6 +2408,24 @@ it.effect(
         createdBy: "user",
         creationSource: "web",
       });
+      // The production layers read the hold file that fork-deploy writes.
+      const hold = NodePath.join(config.stateDir, TurnAdmission.TURN_ADMISSION_HOLD_FILE);
+      yield* fs.writeFileString(hold, JSON.stringify({ expiresAtMs: Number.MAX_SAFE_INTEGER }));
+      const held = yield* orchestrator
+        .dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("move:held"),
+          threadId: sourceId,
+          messageId: MessageId.make("move:held"),
+          text: "Held",
+          attachments: [],
+          dispatchMode: { type: "start_immediately" },
+          createdBy: "user",
+          creationSource: "web",
+        })
+        .pipe(Effect.flip);
+      assert.instanceOf(held, Orchestrator.OrchestratorTurnAdmissionHeldError);
+      yield* fs.remove(hold);
       const messageId = MessageId.make("move:question");
       const historicalRunId = RunId.make("move:completed-run");
       const attachmentId = "thread-move-full-history-11111111-1111-4111-a111-111111111111-pdf";

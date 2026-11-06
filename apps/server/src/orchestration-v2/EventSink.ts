@@ -33,6 +33,7 @@ import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventStore from "./EventStore.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
+import * as TurnAdmission from "./TurnAdmission.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 
 export class EventSinkWriteError extends Schema.TaggedError<EventSinkWriteError>()(
@@ -148,6 +149,8 @@ export interface EventSinkV2Shape {
     };
     /** Like writeWithEffects' updateDelegatedCompletionOnly, for this run's run.updated only. */
     readonly updateDelegatedCompletionOnlyRunId?: RunId;
+    /** Runs while this transaction holds SQLite's write lock, so fork-deploy's barrier orders it. */
+    readonly assertAdmitted?: Effect.Effect<void, TurnAdmission.TurnAdmissionHeldError>;
   }) => Effect.Effect<
     {
       readonly receipt: CommandReceiptStore.CommandReceiptV2;
@@ -637,6 +640,7 @@ const layerBase: Layer.Layer<
     ) {
       const result = yield* commitThenPublish(
         Effect.gen(function* () {
+          if (input.assertAdmitted !== undefined) yield* input.assertAdmitted;
           const reserved = yield* commandReceipts.insertIfAbsent({
             commandId: input.commandId,
             threadId: input.threadId,

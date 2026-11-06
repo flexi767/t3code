@@ -1,4 +1,5 @@
 import * as Scheduler from "../scheduling/Scheduler.ts";
+import * as TurnAdmission from "../orchestration-v2/TurnAdmission.ts";
 import * as NodeUtil from "node:util";
 
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -547,6 +548,67 @@ it.effect("refuses saving an enabled task above the policy ceiling", () =>
         runtimeMode: "full-access",
         interactionMode: "default",
       });
+    }).pipe(Effect.provide(layer));
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("a due task waits out an admission hold and runs once it ends", () =>
+  Effect.gen(function* () {
+    const launches = yield* Ref.make(0);
+    const launched = yield* Deferred.make<void>();
+    let held = true;
+    let sweep: Effect.Effect<void> = Effect.void;
+    const layer = ScheduledTaskService.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          ManagedPolicy.layerTest(),
+          Layer.succeed(TurnAdmission.TurnAdmission, {
+            isHeld: Effect.sync(() => held),
+          }),
+          Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+            launch: () =>
+              Ref.update(launches, (n) => n + 1).pipe(
+                Effect.andThen(Deferred.succeed(launched, undefined)),
+                Effect.as({ threadId: ThreadId.make("thread:launched"), resumed: false } as never),
+              ),
+          }),
+          Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+          Layer.mock(SecretRequests.SecretRequests)({}),
+          Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+            namedProjectsRoot: "/projects",
+            isScratchProject: () => Effect.succeed(false),
+          }),
+          NodeCrypto.layer,
+          Layer.succeed(Scheduler.Scheduler, {
+            register: (name: string, effect: Effect.Effect<void>) =>
+              Effect.sync(() => {
+                if (name === "scheduled-tasks") sweep = effect;
+              }),
+          } as never),
+        ),
+      ),
+    );
+    yield* Effect.gen(function* () {
+      const service = yield* ScheduledTaskService.ScheduledTaskService;
+      yield* service.upsert({
+        id: ScheduledTaskId.make("task:held"),
+        title: "Check in",
+        prompt: "Check progress",
+        enabled: true,
+        schedule: { type: "interval", everyMs: 60_000 },
+        projectId: ProjectId.make("project:test"),
+        workspaceStrategy: { type: "root" },
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      });
+      yield* TestClock.adjust("2 minutes");
+      yield* sweep;
+      assert.equal(yield* Ref.get(launches), 0);
+      held = false;
+      yield* sweep;
+      yield* Deferred.await(launched);
+      assert.equal(yield* Ref.get(launches), 1);
     }).pipe(Effect.provide(layer));
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );

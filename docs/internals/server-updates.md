@@ -63,6 +63,20 @@ could lose the only successful RPC result. The client must then observe the
 prepared version after reconnecting. If installation fails, desktop restarts the
 stopped backends and replays the failure for the same token.
 
+## Pausing new turns
+
+Fork rollouts pause new turns with a hold file in the state directory, because the
+deployment helper runs outside the server and may reach it only over SSH. The check runs
+inside the commit's `BEGIN IMMEDIATE`, and the helper takes that write lock once after
+writing the hold. A commit that passed the check therefore finishes before the helper
+counts active runs, and every later commit sees the hold. Checking outside the transaction
+would let a turn start after the count reported idle.
+
+A held command writes no rejection receipt, because scheduled and limit-recovery commands
+reuse stable IDs and must work once the hold ends. Work an admitted turn depends on stays
+open, since refusing it would fail that turn. An expired or unreadable hold counts as open
+so that a dead rollout cannot stop turns indefinitely.
+
 ## Recovering interrupted threads
 
 Restart continuation is an environment-owned preference, on by default. A

@@ -1,3 +1,5 @@
+mod drain;
+
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -205,12 +207,15 @@ fn read_idle_count(mut read: impl FnMut() -> Result<String>) -> Result<String> {
 }
 // A read-only connection cannot create the -shm a WAL database needs, so it fails with
 // error 14 once the app has closed cleanly. With no sidecars the main file is complete.
-fn sqlite_read_args(db: &Path) -> [String; 2] {
+fn sqlite_has_writer(db: &Path) -> bool {
     let path = db.display().to_string();
-    if ["-wal", "-shm", "-journal"]
+    ["-wal", "-shm", "-journal"]
         .iter()
         .any(|suffix| Path::new(&format!("{path}{suffix}")).exists())
-    {
+}
+fn sqlite_read_args(db: &Path) -> [String; 2] {
+    let path = db.display().to_string();
+    if sqlite_has_writer(db) {
         ["-readonly".into(), path]
     } else {
         let uri = path
@@ -220,24 +225,34 @@ fn sqlite_read_args(db: &Path) -> [String; 2] {
         ["-batch".into(), format!("file:{uri}?immutable=1")]
     }
 }
+fn active_turns_at(db: &Path) -> Result<u64> {
+    if !db.exists() {
+        return Ok(0);
+    }
+    let open = sqlite_read_args(db);
+    let count = read_idle_count(|| output(
+        "sqlite3",
+        &[
+            open[0].as_str(),
+            open[1].as_str(),
+            "SELECT count(*) FROM orchestration_v2_projection_runs WHERE status IN ('queued','preparing','starting','running','waiting')",
+        ],
+    )).map_err(|error| format!("Cannot check active turns in {}: {error}", db.display()))?;
+    Ok(count.parse()?)
+}
 fn idle_at(db: &Path) -> Result<()> {
-    if db.exists() {
-        let open = sqlite_read_args(db);
-        let count = read_idle_count(|| output(
-            "sqlite3",
-            &[
-                open[0].as_str(),
-                open[1].as_str(),
-                "SELECT count(*) FROM orchestration_v2_projection_runs WHERE status IN ('queued','preparing','starting','running','waiting')",
-            ],
-        )).map_err(|error| format!("Cannot check active turns in {}: {error}", db.display()))?;
-        if count != "0" {
-            return Err(
-                format!("{count} active turns; finish before switching server versions").into(),
-            );
-        }
+    let count = active_turns_at(db)?;
+    if count != 0 {
+        return Err(
+            format!("{count} active turns; finish before switching server versions").into(),
+        );
     }
     Ok(())
+}
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as u64)
 }
 fn backup(ver: &str) -> Result<PathBuf> {
     idle()?;
@@ -325,6 +340,20 @@ fn link_cli(ver: &str) -> Result<()> {
     fs::rename(temporary, launcher)?;
     Ok(())
 }
+fn service_for_version(original: &str, ver: &str) -> Result<String> {
+    let marker = "/runtime/versions/";
+    if original.matches(marker).count() != 1 {
+        return Err("Expected exactly one managed executable".into());
+    }
+    let start = original.find(marker).unwrap() + marker.len();
+    let end = start
+        + original[start..]
+            .find('/')
+            .ok_or("Invalid service executable")?;
+    let mut replacement = original.to_string();
+    replacement.replace_range(start..end, ver);
+    Ok(replacement)
+}
 fn activate(ver: &str) -> Result<()> {
     if fs::read_to_string(runtime(ver)?.join(".install-complete"))?.trim() != ver {
         return Err("Unverified runtime".into());
@@ -337,17 +366,12 @@ fn activate(ver: &str) -> Result<()> {
         ".config/systemd/user/t3code.service"
     });
     let original = fs::read_to_string(&service)?;
-    let marker = "/runtime/versions/";
-    if original.matches(marker).count() != 1 {
-        return Err("Expected exactly one managed executable".into());
+    let replacement = service_for_version(&original, ver)?;
+    // A retry must not bounce a server that a previous attempt already moved to this version.
+    if replacement == original {
+        link_cli(ver)?;
+        return Ok(());
     }
-    let start = original.find(marker).unwrap() + marker.len();
-    let end = start
-        + original[start..]
-            .find('/')
-            .ok_or("Invalid service executable")?;
-    let mut replacement = original.clone();
-    replacement.replace_range(start..end, ver);
     fs::copy(
         &service,
         saved.join(service.file_name().ok_or("Service filename")?),
@@ -648,6 +672,90 @@ fn activate_fleet(ver: &str, builds: &Path, helper: &str) -> Result<()> {
         )?,
     )?;
     println!("Fleet complete: M5, M3 and J run {ver}");
+    Ok(())
+}
+
+fn receipt_covers(receipt: &str, ver: &str, hosts: &[&str]) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(receipt) else {
+        return false;
+    };
+    value["version"] == ver
+        && hosts.iter().all(|host| {
+            value["hosts"]
+                .as_array()
+                .is_some_and(|recorded| recorded.iter().any(|entry| entry == host))
+        })
+}
+fn fleet_already_active(builds: &Path, ver: &str) -> bool {
+    let hosts: Vec<&str> = std::iter::once("m5")
+        .chain(remote_hosts().iter().copied())
+        .collect();
+    fs::read_to_string(builds.join("fleet-complete.json"))
+        .is_ok_and(|receipt| receipt_covers(&receipt, ver, &hosts))
+        && installed_version(Path::new("/Applications/T3 Code (Beta).app")).as_deref() == Some(ver)
+}
+fn activate_when_idle(ver: &str, timeout: &str) -> Result<()> {
+    let timeout_seconds: u64 = timeout.parse()?;
+    if timeout_seconds == 0 || timeout_seconds > drain::MAX_WAIT_SECONDS {
+        return Err(format!(
+            "--when-idle-timeout must be 1 to {} seconds",
+            drain::MAX_WAIT_SECONDS
+        )
+        .into());
+    }
+    let builds = home()?.join(".t3/builds").join(ver);
+    runtime(ver)?;
+    if fleet_already_active(&builds, ver) {
+        println!("Fleet {ver} is already active; no host was changed.");
+        return Ok(());
+    }
+    let helper = prepare_helpers(ver)?;
+    drain::install_signal_handlers();
+    let local = drain::LocalHost::current("m5")?;
+    let remotes: Vec<drain::RemoteHost> = remote_hosts()
+        .iter()
+        .map(|name| drain::RemoteHost {
+            name,
+            helper: helper.clone(),
+        })
+        .collect();
+    let mut hosts: Vec<&dyn drain::DrainHost> = vec![&local];
+    hosts.extend(remotes.iter().map(|host| host as &dyn drain::DrainHost));
+    println!("New turns are paused. Waiting up to {timeout_seconds} seconds for running turns.");
+    let owner = format!("fleet:{ver}:{}", std::process::id());
+    let end = drain::drain_and_activate(
+        &hosts,
+        &owner,
+        timeout_seconds,
+        &drain::SystemClock,
+        &drain::interrupted,
+        &mut || activate_fleet(ver, &builds, &helper),
+    )?;
+    match end {
+        drain::DrainEnd::Activated => Ok(()),
+        drain::DrainEnd::TimedOut(waiting) => Err(format!(
+            "Timed out waiting for {}. New turns are allowed again and nothing was switched.",
+            waiting.join(", ")
+        )
+        .into()),
+        drain::DrainEnd::Cancelled(reason) => Err(format!(
+            "Cancelled: {reason}. New turns are allowed again and nothing was switched."
+        )
+        .into()),
+    }
+}
+fn cancel_when_idle() -> Result<()> {
+    let local = drain::LocalHost::current("m5")?;
+    let Some(owner) = fs::read_to_string(local.hold_path())
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|value| value["owner"].as_str().map(str::to_string))
+    else {
+        println!("No rollout is holding new turns on M5.");
+        return Ok(());
+    };
+    drain::release_hold(&local.hold_path(), &owner)?;
+    println!("Cancelled {owner}. The waiting rollout releases the other hosts as it stops.");
     Ok(())
 }
 
@@ -963,6 +1071,9 @@ fn parse() -> Result<(String, BTreeMap<String, String>)> {
             "app",
             "base-dir",
             "built-client",
+            "when-idle-timeout",
+            "owner",
+            "ttl-seconds",
         ]
         .contains(&key.as_str())
         {
@@ -988,8 +1099,34 @@ fn main() {
         };
         match action.as_str() {
             "ui" => ui(&flags),
-            "fleet" => fleet(get("version")?, get("upstream-tag")?, false),
+            "fleet" => match flags.get("when-idle-timeout") {
+                Some(timeout) => {
+                    fleet(get("version")?, get("upstream-tag")?, true)?;
+                    activate_when_idle(get("version")?, timeout)
+                }
+                None => fleet(get("version")?, get("upstream-tag")?, false),
+            },
             "fleet-stage" => fleet(get("version")?, get("upstream-tag")?, true),
+            "fleet-activate" if flags.contains_key("when-idle-timeout") => {
+                activate_when_idle(get("version")?, get("when-idle-timeout")?)
+            }
+            "fleet-activate-cancel" => cancel_when_idle(),
+            "host-hold" => drain::LocalHost::current("host").and_then(|host| {
+                drain::acquire_hold(
+                    &host.hold_path(),
+                    get("owner")?,
+                    get("ttl-seconds")?.parse()?,
+                    now_ms(),
+                )
+            }),
+            "host-release" => drain::LocalHost::current("host")
+                .and_then(|host| drain::release_hold(&host.hold_path(), get("owner")?)),
+            "host-probe" => {
+                use drain::DrainHost;
+                let probe = drain::LocalHost::current("host")?.probe(get("owner")?)?;
+                println!("{}", drain::format_probe(&probe));
+                Ok(())
+            }
             "fleet-activate" => {
                 let ver = get("version")?;
                 let builds = home()?.join(".t3/builds").join(ver);
@@ -1009,7 +1146,7 @@ fn main() {
             }
             "help" | "--help" => {
                 println!(
-                    "fork-deploy ui [--app PATH] [--base-dir PATH] [--built-client PATH]\nfork-deploy fleet --version VERSION --upstream-tag TAG\nfork-deploy fleet-stage --version VERSION --upstream-tag TAG\nfork-deploy fleet-activate --version VERSION\nFull fleet activation requires idle hosts; fleet-stage never activates; UI updates never restart servers."
+                    "fork-deploy ui [--app PATH] [--base-dir PATH] [--built-client PATH]\nfork-deploy fleet --version VERSION --upstream-tag TAG\nfork-deploy fleet-stage --version VERSION --upstream-tag TAG\nfork-deploy fleet-activate --version VERSION\nFull fleet activation requires idle hosts; fleet-stage never activates; UI updates never restart servers.\nfork-deploy fleet|fleet-activate --when-idle-timeout SECONDS ...\nfork-deploy fleet-activate-cancel"
                 );
                 Ok(())
             }
@@ -1025,6 +1162,20 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_host_already_on_the_version_keeps_its_service_definition() {
+        let service = "ExecStart=/home/u/.t3/runtime/versions/1.2.3/t3 serve";
+        assert_eq!(service_for_version(service, "1.2.3").unwrap(), service);
+        assert_ne!(service_for_version(service, "1.2.4").unwrap(), service);
+    }
+    #[test]
+    fn a_retry_treats_only_a_covering_receipt_as_already_active() {
+        let receipt = r#"{"version":"1.2.3","hosts":["m5","j"]}"#;
+        assert!(receipt_covers(receipt, "1.2.3", &["m5", "j"]));
+        assert!(!receipt_covers(receipt, "1.2.3", &["m5", "m3", "j"]));
+        assert!(!receipt_covers(receipt, "1.2.4", &["m5", "j"]));
+        assert!(!receipt_covers("not json", "1.2.3", &["m5"]));
+    }
     #[test]
     fn connect_build_refuses_missing_public_configuration() {
         let complete = BTreeMap::from([
@@ -1044,7 +1195,7 @@ mod tests {
             assert!(validate_connect_environment(&missing).is_err());
         }
     }
-    fn temporary(name: &str) -> PathBuf {
+    pub(crate) fn temporary(name: &str) -> PathBuf {
         let path = env::temp_dir().join(format!("t3-rust-deploy-{}-{name}", std::process::id()));
         fs::create_dir(&path).unwrap();
         path

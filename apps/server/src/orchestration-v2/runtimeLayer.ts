@@ -39,6 +39,7 @@ import * as ProviderContinuationService from "./ProviderContinuationService.ts";
 import * as ThreadTitleRegenerationService from "./ThreadTitleRegenerationService.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import * as TurnAdmission from "./TurnAdmission.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as CommandOutputHub from "./CommandOutputHub.ts";
 import * as ProviderRuntimeRecoveryService from "./ProviderRuntimeRecoveryService.ts";
@@ -214,6 +215,7 @@ const layerRunFinalizationServiceProvided = RunFinalizationService.layer.pipe(
 const layerOrchestratorProvided = Orchestrator.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
+      TurnAdmission.layer,
       layerCheckpointServiceProvided,
       CommandPolicy.layer,
       layerStores,
@@ -284,6 +286,7 @@ const layerSecretRequestsProvided = SecretRequests.layer.pipe(
 const layerScheduledTaskProvided = ScheduledTaskService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
+      TurnAdmission.layer,
       layerThreadLaunchProvided,
       layerThreadManagementProvided,
       layerManagedProjectFoldersProvided,
