@@ -29,5 +29,8 @@ export function sessionTokenCount(tokens: UsageTokenTotals): number {
 }
 
 export function formatSessionCost(costUsd: number, partial = false): string {
-  return `${partial ? "≥" : ""}$${Math.round(costUsd).toLocaleString("en-US")}`;
+  const rounded = Math.round(costUsd);
+  const amount =
+    costUsd > 0 && rounded === 0 ? costUsd.toFixed(1).slice(1) : rounded.toLocaleString("en-US");
+  return `${partial ? "≥" : ""}$${amount}`;
 }

@@ -25,6 +25,12 @@ it("counts each billed token once, without adding reasoning twice", () => {
 it("rounds the session estimate to whole dollars and marks partial pricing", () => {
   expect(formatSessionCost(12.49)).toBe("$12");
   expect(formatSessionCost(12.5)).toBe("$13");
-  expect(formatSessionCost(0.12)).toBe("$0");
+  expect(formatSessionCost(0.12)).toBe("$.1");
+  expect(formatSessionCost(0.3)).toBe("$.3");
+  expect(formatSessionCost(0.49)).toBe("$.5");
+  expect(formatSessionCost(0.5)).toBe("$1");
+  expect(formatSessionCost(0)).toBe("$0");
+  expect(formatSessionCost(0.02)).toBe("$.0");
+  expect(formatSessionCost(0.12, true)).toBe("≥$.1");
   expect(formatSessionCost(1234.8, true)).toBe("≥$1,235");
 });
