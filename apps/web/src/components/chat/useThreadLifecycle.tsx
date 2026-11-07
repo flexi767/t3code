@@ -543,6 +543,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
             input: {
               threadId,
               message: { messageId, role: "user", text, attachments: [] },
+              dispatchMode: "queue",
               modelSelection: context.selectedModelSelection,
               runtimeMode,
               interactionMode: context.interactionMode,

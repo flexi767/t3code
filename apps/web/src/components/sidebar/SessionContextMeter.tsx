@@ -35,11 +35,9 @@ export function SessionContextMeter({
   const context = query.data?.threadContexts?.find((entry) => entry.threadId === thread.id);
   const [pending, setPending] = useState(false);
   const send = useOrchestrationCommand(threadEnvironment.startTurn, "Failed to compact context");
-  const busy =
-    thread.runtime?.activeRunId != null || thread.hasPendingApprovals || thread.hasPendingUserInput;
   const supported = driverKind === "claudeAgent" || driverKind === "codex";
   const compact = async () => {
-    if (!canOperate || busy || pending || !supported) return;
+    if (!canOperate || pending || !supported) return;
     setPending(true);
     await send({
       environmentId: thread.environmentId,
@@ -49,7 +47,7 @@ export function SessionContextMeter({
         modelSelection: thread.modelSelection,
         runtimeMode: thread.runtimeMode,
         interactionMode: thread.interactionMode,
-        dispatchMode: "start",
+        dispatchMode: "queue",
       },
     }).finally(() => setPending(false));
   };
@@ -91,7 +89,7 @@ export function SessionContextMeter({
       onCompact={() => {
         void compact();
       }}
-      compactDisabled={!canOperate || busy || pending || !supported}
+      compactDisabled={!canOperate || pending || !supported}
       compactDisabledReason={
         !canOperate
           ? "Read-only connection"
@@ -99,7 +97,7 @@ export function SessionContextMeter({
             ? "Model cannot compact"
             : pending
               ? "Compacting…"
-              : "Finish current turn first"
+              : null
       }
     />
   );

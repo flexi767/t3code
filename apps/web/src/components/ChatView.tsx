@@ -2460,15 +2460,11 @@ export default function ChatView(props: ChatViewProps) {
     !activeProject ||
     !isServerThread ||
     !manualCompactionProviderAvailable ||
-    isWorking ||
     isRevertingCheckpoint ||
     threadDetailLoading ||
     isPreparingWorktree ||
     activeEnvironmentUnavailable ||
-    feedbackUploading ||
-    pendingApprovals.length > 0 ||
-    pendingUserInputs.length > 0 ||
-    showPlanFollowUpPrompt;
+    feedbackUploading;
   const compactDisabled = compactThreadUnavailable;
   const compactDisabledReason = compactDisabled
     ? !canOperateThread
@@ -2488,6 +2484,7 @@ export default function ChatView(props: ChatViewProps) {
     !resumeCompactionPermanentlyDismissed &&
     !nativeResumeCompactionDismissed &&
     !compactDisabled &&
+    !isWorking &&
     !hasHeldQueuedRuns &&
     multipleModelSelections === null &&
     shouldOfferResumeCompaction({
