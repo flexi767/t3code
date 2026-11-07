@@ -65,7 +65,7 @@ export function SidebarThreadHeader({
     <div
       className={cn(
         // Sits in the title bar above this group, centered on the 52px workspace bar.
-        "@container absolute top-[calc(var(--workspace-controls-top)-42px)] md:top-[calc(var(--workspace-controls-top)-30px)] left-[var(--workspace-titlebar-content-left)] right-3 flex items-center gap-1 md:left-[var(--workspace-controls-left)]",
+        "@container pointer-events-auto absolute top-[calc(var(--workspace-controls-top)-42px)] md:top-[calc(var(--workspace-controls-top)-30px)] left-[var(--workspace-titlebar-content-left)] right-3 flex items-center gap-1 md:left-[var(--workspace-controls-left)]",
         !searchExpanded && "md:right-[calc(var(--workspace-titlebar-control-size)+7px)]",
         onBackdrop &&
           "[&_input]:text-white! [&_input]:placeholder:text-white/70! [&_svg]:text-white/70! [&>div:first-child:focus-within]:bg-white/15! [&>div:first-child:hover]:bg-white/15!",
