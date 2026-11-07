@@ -3105,7 +3105,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         ref={sidebarContentRef}
         className="min-h-full"
         fixedHeader={
-          <SidebarGroup className="z-[1]">
+          <SidebarGroup className="z-[1] -mb-4">
             <SidebarThreadHeader
               hasProjects={projectGroups.length > 0}
               projectScope={

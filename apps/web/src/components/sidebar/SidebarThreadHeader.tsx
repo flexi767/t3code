@@ -5,6 +5,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
   type RefObject,
+  useState,
 } from "react";
 
 import { useEnvironmentIdentificationMode } from "~/hooks/useSettings";
@@ -51,6 +52,7 @@ export function SidebarThreadHeader({
   activeSearchResultIndex,
   onClearSearch,
 }: SidebarThreadHeaderProps) {
+  const [searchExpanded, setSearchExpanded] = useState(false);
   const onBackdrop = useSidebarStageBackdropVariant(useEnvironmentIdentificationMode()) !== null;
   const resultsVisible = isSearching && searchResultCount > 0;
   // Shrinking results can remove the active option; never leave aria-activedescendant pointing at it.
@@ -63,12 +65,17 @@ export function SidebarThreadHeader({
     <div
       className={cn(
         // Sits in the title bar above this group; 42px centers it in the 52px bar.
-        "absolute top-[calc(var(--workspace-controls-top)-42px)] left-[var(--workspace-titlebar-content-left)] right-3 flex items-center gap-1 md:right-[calc(var(--workspace-titlebar-control-size)+1rem)] md:left-[var(--workspace-controls-left)]",
+        "@container absolute top-[calc(var(--workspace-controls-top)-42px)] left-[var(--workspace-titlebar-content-left)] right-3 flex items-center gap-1 md:left-[var(--workspace-controls-left)]",
+        !searchExpanded && "md:right-[calc(var(--workspace-titlebar-control-size)+7px)]",
         onBackdrop &&
-          "[&_input]:text-white! [&_input]:placeholder:text-white/70! [&_svg]:text-white/70!",
+          "[&_input]:text-white! [&_input]:placeholder:text-white/70! [&_svg]:text-white/70! [&>div:first-child:focus-within]:bg-white/15! [&>div:first-child:hover]:bg-white/15!",
       )}
+      data-sidebar-search-expanded={searchExpanded ? "" : undefined}
     >
-      <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-sidebar-muted-foreground [-webkit-app-region:no-drag] hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-within:bg-sidebar-row-hover focus-within:text-sidebar-foreground focus-within:ring-1 focus-within:ring-inset focus-within:ring-ring/70">
+      <div
+        className="flex h-8 min-w-0 flex-1 cursor-text items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-sidebar-muted-foreground [-webkit-app-region:no-drag] hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-within:bg-sidebar-row-hover focus-within:text-sidebar-foreground focus-within:ring-1 focus-within:ring-inset focus-within:ring-ring/70"
+        onClick={() => searchInputRef.current?.focus()}
+      >
         <SearchIcon className="size-4 shrink-0 text-(--sidebar-icon-color)" />
         <SidebarInput
           ref={searchInputRef}
@@ -76,7 +83,18 @@ export function SidebarThreadHeader({
           type="search"
           value={searchQuery}
           onChange={(event) => onSearchQueryChange(event.currentTarget.value)}
-          onKeyDown={onSearchKeyDown}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && searchExpanded && searchQuery === "") {
+              event.currentTarget.blur();
+            }
+            onSearchKeyDown(event);
+          }}
+          onFocus={(event) => {
+            if (event.currentTarget.clientWidth === 0) setSearchExpanded(true);
+          }}
+          onBlur={() => {
+            if (searchQuery === "") setSearchExpanded(false);
+          }}
           placeholder="Search"
           aria-label="Search threads"
           role="combobox"
@@ -88,7 +106,7 @@ export function SidebarThreadHeader({
               ? `sidebar-thread-search-result-${activeSearchResultIndex}`
               : undefined
           }
-          className="min-w-0 flex-1"
+          className={cn("min-w-0 flex-1", !searchExpanded && "@max-[178px]:max-w-0")}
         />
         {isSearching ? (
           <Button
@@ -106,7 +124,12 @@ export function SidebarThreadHeader({
           </Button>
         ) : null}
       </div>
-      <div className="flex shrink-0 [-webkit-app-region:no-drag] items-center">
+      <div
+        className={cn(
+          "flex shrink-0 [-webkit-app-region:no-drag] items-center",
+          searchExpanded && "hidden",
+        )}
+      >
         {hasProjects ? (
           <>
             {projectScope}
