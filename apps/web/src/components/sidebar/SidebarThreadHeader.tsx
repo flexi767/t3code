@@ -60,15 +60,15 @@ export function SidebarThreadHeader({
     : "New thread";
 
   return (
-    <div className="-mt-4 flex items-center justify-end gap-1">
-      <div
-        className={cn(
-          // Sits in the title bar above this row; 42px centers it in the 52px bar.
-          "absolute top-[calc(var(--workspace-controls-top)-42px)] left-[var(--workspace-titlebar-content-left)] right-3 flex h-8 min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-sidebar-muted-foreground [-webkit-app-region:no-drag] hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-within:bg-sidebar-row-hover focus-within:text-sidebar-foreground focus-within:ring-1 focus-within:ring-inset focus-within:ring-ring/70 md:right-[calc(var(--workspace-titlebar-control-size)+1rem)] md:left-[var(--workspace-controls-left)]",
-          onBackdrop &&
-            "[&_input]:text-white! [&_input]:placeholder:text-white/70! [&_svg]:text-white/70!",
-        )}
-      >
+    <div
+      className={cn(
+        // Sits in the title bar above this group; 42px centers it in the 52px bar.
+        "absolute top-[calc(var(--workspace-controls-top)-42px)] left-[var(--workspace-titlebar-content-left)] right-3 flex items-center gap-1 md:right-[calc(var(--workspace-titlebar-control-size)+1rem)] md:left-[var(--workspace-controls-left)]",
+        onBackdrop &&
+          "[&_input]:text-white! [&_input]:placeholder:text-white/70! [&_svg]:text-white/70!",
+      )}
+    >
+      <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-sidebar-muted-foreground [-webkit-app-region:no-drag] hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-within:bg-sidebar-row-hover focus-within:text-sidebar-foreground focus-within:ring-1 focus-within:ring-inset focus-within:ring-ring/70">
         <SearchIcon className="size-4 shrink-0 text-(--sidebar-icon-color)" />
         <SidebarInput
           ref={searchInputRef}
