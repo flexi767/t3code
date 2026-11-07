@@ -1174,30 +1174,34 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     prBadge === null &&
     diff === null &&
     runningTerminalIds.length === 0;
-  const workspaceIndicators = (
-    <span className="inline-flex shrink-0 items-center gap-1">
-      <SessionWorkspaceBadge thread={thread} />
-      <SessionContextMeter
-        thread={thread}
-        driverKind={providerEntry?.driverKind ?? null}
-        modelLabel={selectedModel?.name ?? modelLabel}
-      />
-    </span>
-  );
+  const workspaceIndicators =
+    variantAction === "unsettle" ? null : (
+      <span className="inline-flex shrink-0 items-center gap-1">
+        <SessionWorkspaceBadge thread={thread} />
+        <SessionContextMeter
+          thread={thread}
+          driverKind={providerEntry?.driverKind ?? null}
+          modelLabel={selectedModel?.name ?? modelLabel}
+        />
+      </span>
+    );
   const sessionIndicators = (
     <span className="inline-flex shrink-0 items-center gap-1 text-secondary-label text-xs">
       <SessionUsageBadge
         environmentId={thread.environmentId}
         threadId={thread.id}
         working={thread.runtime?.status === "running"}
+        showTokens={variantAction !== "unsettle"}
       />
-      {remoteMachineIcon}
+      {variantAction === "unsettle" ? null : remoteMachineIcon}
       <span className="inline-flex shrink-0 items-center gap-0">
         <SidebarProviderStack
           thread={thread}
           providerEntryByInstanceId={props.providerEntryByInstanceId}
         />
-        <span aria-label={modelLabel}>{compactSessionModel(modelLabel)}</span>
+        <span aria-label={modelLabel}>
+          {compactSessionModel(modelLabel, variantAction !== "unsettle")}
+        </span>
       </span>
     </span>
   );
@@ -1302,7 +1306,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               ) : (
                 <span
                   className={cn(
-                    "relative ml-auto flex h-6 min-w-8 shrink-0 items-center justify-end",
+                    "relative flex h-6 shrink-0 items-center justify-end",
+                    variantAction === "unsettle" ? "-ml-1.5" : "ml-auto min-w-8",
                     props.sweepAction !== null && "hidden",
                     jumpHintLabel && JUMP_HINT_SLOT_CLASS_NAME,
                   )}

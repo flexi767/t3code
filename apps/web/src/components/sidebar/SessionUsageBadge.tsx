@@ -18,10 +18,12 @@ export function SessionUsageBadge({
   environmentId,
   threadId,
   working,
+  showTokens = true,
 }: {
   environmentId: EnvironmentId;
   threadId: ThreadId;
   working: boolean;
+  showTokens?: boolean;
 }) {
   const rowAnchor = useRef<HTMLElement | null>(null);
   const canRead = useEnvironmentScope(environmentId, AuthDiagnosticsReadScope);
@@ -70,7 +72,7 @@ export function SessionUsageBadge({
           />
         }
       >
-        {tokens === null ? null : (
+        {tokens === null || !showTokens ? null : (
           <span className="hidden @min-[19rem]/session:inline">
             {new Intl.NumberFormat("en-US", {
               notation: "compact",

@@ -9,9 +9,16 @@ describe("session labels", () => {
     ["claude-opus-4-6", "O4.6"],
     ["Fable 5.5", "F5.5"],
     ["Opus", "O"],
+    ["Claude Sonnet 4.6", "S4.6"],
+    ["GPT-6.1 Terra", "T6.1"],
+    ["GPT-6-Luna", "L6"],
+    ["claude-haiku-4-5", "H4.5"],
+    ["Sonnet", "S"],
+    ["Haiku", "H"],
     ["Gemini 3 Pro", "Gemini 3 Pro"],
   ])("formats %s as %s", (label, expected) => {
     expect(compactSessionModel(label)).toBe(expected);
+    expect(compactSessionModel(label, false)).toBe(expected.replace(/(?<=[OSFATLH])\d.*$/, ""));
   });
 
   it.each([
