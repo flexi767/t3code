@@ -112,6 +112,9 @@ Do not install a separately versioned desktop or omit the SSH `.install-complete
 Keep the local persistent signing identity in ignored `.env.local` and preserve T3 Connect configuration.
 See [fleet rollout](docs/operations/fork-fleet.md).
 
+Keep personal UI changes small so the fork stays close to upstream. Change a class or prop in place, and hide upstream UI rather than deleting it. Do not refactor, split, move or rename code for a visual change.
+To see UI edits before a commit, use `vp run dev`. Commit, then publish with `scripts/fork-deploy ui`; never publish uncommitted changes.
+
 - Before you push, run `vp run check:changed`. It runs CI's fast checks for changed files: format, lint, knip, typecheck of affected packages and dependents, tests beside changes, and the cross-file checks those miss. CI still runs the full test suites.
 - While you iterate, run `vp test run <files>`. For big files, add `-t "<name>"`.
 - Use `vp run typecheck`, not `npx tsc`; it caches per package. Both run tsc-rs (`typescript` is the `@tsc-rs/typescript` drop-in).
