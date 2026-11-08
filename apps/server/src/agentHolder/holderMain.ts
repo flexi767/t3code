@@ -230,6 +230,9 @@ export const runAgentHolder = async (bootstrapPath: string): Promise<void> => {
     methods: FORWARDED_RUNTIME_METHODS.filter((method) => runtimeSession[method] !== undefined),
     mcpAppMethods: runtimeSession.mcpApps !== undefined,
     backgroundTasksEndWithProcess: runtimeSession.backgroundTasksEndWithProcess === true,
+    ...(runtimeSession.canResumeAfterRestart === undefined
+      ? {}
+      : { canResumeAfterRestart: runtimeSession.canResumeAfterRestart }),
   });
 
   /** Agents get the proxy's address, which stays valid while the server restarts. */

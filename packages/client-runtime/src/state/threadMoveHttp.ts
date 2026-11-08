@@ -36,6 +36,7 @@ const context = Effect.gen(function* () {
 });
 
 const isThreadMoveError = Schema.is(ThreadMoveError);
+const isRemoteEnvironmentAuthFetchError = Schema.is(RemoteEnvironmentAuthFetchError);
 
 /** The shared request mapper only knows common errors; a move's refusal must keep its message. */
 export const surfaceThreadMoveRefusal = <A, E, R>(
@@ -43,7 +44,7 @@ export const surfaceThreadMoveRefusal = <A, E, R>(
 ): Effect.Effect<A, E | ThreadMoveError, R> =>
   request.pipe(
     Effect.mapError((error) =>
-      error instanceof RemoteEnvironmentAuthFetchError && isThreadMoveError(error.cause)
+      isRemoteEnvironmentAuthFetchError(error) && isThreadMoveError(error.cause)
         ? error.cause
         : error,
     ),

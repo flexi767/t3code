@@ -19,6 +19,7 @@ export interface HeldSessionDescriptor {
   readonly methods: ReadonlyArray<string>;
   readonly mcpAppMethods: boolean;
   readonly backgroundTasksEndWithProcess: boolean;
+  readonly canResumeAfterRestart?: boolean;
 }
 
 export interface HeldSessionSnapshot {

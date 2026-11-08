@@ -6,7 +6,9 @@ import * as NodeFS from "node:fs";
 import * as NodeNet from "node:net";
 import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
+import * as NodeURL from "node:url";
 import { type ProviderSessionId, type ThreadId, type ProviderInstanceId } from "@t3tools/contracts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import type { McpProviderSessionConfig } from "@t3tools/provider-core/server/mcpSession";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
@@ -197,6 +199,9 @@ const makeHeldRuntime = (input: {
       ...(descriptor.backgroundTasksEndWithProcess
         ? { backgroundTasksEndWithProcess: true as const }
         : {}),
+      ...(descriptor.canResumeAfterRestart === undefined
+        ? {}
+        : { canResumeAfterRestart: descriptor.canResumeAfterRestart }),
       ...forward("ensureThread", (value: { threadId: ThreadId }) => value.threadId),
       ...forward("resumeThread", (value: { threadId?: ThreadId }) => value.threadId),
       ...forward("injectHistory"),
@@ -421,6 +426,12 @@ export const layer = Layer.effect(
     const mcpRegistry = yield* McpSessionRegistry.McpSessionRegistry;
     const continuations = yield* ProviderContinuationRequests.ProviderContinuationRequests;
     const scope = yield* Scope.Scope;
+    const executablePath = yield* HostProcess.ExecutablePath;
+    const isExecutable = yield* HostProcess.IsExecutable;
+    // In a bundle import.meta.url is bin.mjs; development and tests use this source module.
+    const holderEntry = NodeURL.fileURLToPath(
+      new URL(import.meta.url.endsWith(".ts") ? "../bin.ts" : "./bin.mjs", import.meta.url),
+    );
     const runPush = Effect.runForkWith(yield* Effect.context<never>());
     const directory = NodePath.join(config.stateDir, REGISTRATION_DIRECTORY);
     const usageHooks = new Map<string, (update: never) => Effect.Effect<void>>();
@@ -444,11 +455,10 @@ export const layer = Layer.effect(
         JSON.stringify(toWire({ version: packageJson.version, config })),
         { mode: 0o600 },
       );
-      const entry = process.argv[1]!;
+      // A single-file build is its own entry point; a bundle or source run needs the script.
       const holderCommand = [
-        process.execPath,
-        ...process.execArgv,
-        entry,
+        executablePath,
+        ...(isExecutable ? [] : [holderEntry]),
         "__agent-holder",
         bootstrapPath,
       ];
