@@ -5,6 +5,7 @@ import {
   OrchestratorMcpThreadSendResult,
   OrchestratorMcpThreadWaitResult,
   ProjectId,
+  type ProviderOptionSelection,
   RunId,
   ThreadId,
   TrimmedNonEmptyString,
@@ -557,6 +558,25 @@ const threadArgument = Argument.String("thread").pipe(Argument.withDescription("
 
 const decodeThreadIdValue = Schema.decodeUnknownEffect(ThreadId);
 const decodeTitle = Schema.decodeUnknownEffect(TrimmedNonEmptyString);
+
+/** `true` and `false` become booleans, since the server rejects a string for a boolean option. */
+export const parseModelOptions = Effect.fn("cli.thread.parseModelOptions")(function* (
+  pairs: ReadonlyArray<string>,
+) {
+  const options: Array<ProviderOptionSelection> = [];
+  for (const pair of pairs) {
+    const separator = pair.indexOf("=");
+    const id = pair.slice(0, separator).trim();
+    const value = pair.slice(separator + 1).trim();
+    if (separator < 0 || id.length === 0 || value.length === 0) {
+      return yield* new ThreadUsageError({
+        detail: `--option takes <id>=<value>, such as reasoningEffort=high. Got '${pair}'.`,
+      });
+    }
+    options.push({ id, value: value === "true" ? true : value === "false" ? false : value });
+  }
+  return options;
+});
 const decodeThreadId = (value: string) =>
   decodeThreadIdValue(value.trim()).pipe(
     Effect.mapError(() => new ThreadUsageError({ detail: `'${value}' is not a thread id.` })),
@@ -616,6 +636,12 @@ const threadStartCommand = Command.make("start", {
     Flag.withDescription("Model slug. Defaults to the project's default model."),
     Flag.optional,
   ),
+  option: Flag.String("option").pipe(
+    Flag.withDescription(
+      "Model option as <id>=<value>, such as reasoningEffort=high. Repeatable. Needs --model.",
+    ),
+    Flag.atLeast(0),
+  ),
   worktree: Flag.String("worktree").pipe(
     Flag.withDescription(
       "Run in a new git worktree based on this branch, tag, or commit, instead of the project folder.",
@@ -637,6 +663,10 @@ const threadStartCommand = Command.make("start", {
       if (Option.isSome(flags.provider) !== Option.isSome(flags.model)) {
         return yield* new ThreadUsageError({ detail: "--provider and --model go together." });
       }
+      if (flags.option.length > 0 && Option.isNone(flags.model)) {
+        return yield* new ThreadUsageError({ detail: "--option needs --provider and --model." });
+      }
+      const options = yield* parseModelOptions(flags.option);
       const title = yield* decodeTitle(
         Option.getOrElse(flags.title, () => titleFromMessage(message)),
       ).pipe(Effect.mapError(() => new ThreadUsageError({ detail: "The title is empty." })));
@@ -656,6 +686,7 @@ const threadStartCommand = Command.make("start", {
                     modelSelection: {
                       instanceId: flags.provider.value,
                       model: flags.model.value,
+                      ...(options.length === 0 ? {} : { options }),
                     },
                   }
                 : {}),

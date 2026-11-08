@@ -20,6 +20,7 @@ import {
   persistServerRuntimeState,
 } from "../serverRuntimeState.ts";
 import {
+  parseModelOptions,
   readLatestMessages,
   threadCommand,
   type ThreadTools,
@@ -292,3 +293,20 @@ it("titles from a long first line without splitting an emoji", () => {
   const title = titleFromMessage(`${"a".repeat(78)}😀 and the rest of a long first line`);
   assert.strictEqual(title, `${"a".repeat(78)}…`);
 });
+
+it.effect("--option turns id=value pairs into model options, keeping booleans boolean", () =>
+  Effect.gen(function* () {
+    assert.deepStrictEqual(
+      yield* parseModelOptions(["reasoningEffort=high", "fastMode=true", "note=a=b"]),
+      [
+        { id: "reasoningEffort", value: "high" },
+        { id: "fastMode", value: true },
+        { id: "note", value: "a=b" },
+      ],
+    );
+    for (const bad of ["reasoningEffort", "=high", "reasoningEffort= "]) {
+      const error = yield* Effect.flip(parseModelOptions([bad]));
+      assert.strictEqual(error._tag, "ThreadUsageError");
+    }
+  }),
+);
