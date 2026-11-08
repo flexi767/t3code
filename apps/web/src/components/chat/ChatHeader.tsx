@@ -10,7 +10,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { ChevronDownIcon } from "lucide-react";
+import { ChevronDownIcon, PinIcon, PinOffIcon } from "lucide-react";
 import {
   memo,
   useEffect,
@@ -24,6 +24,8 @@ import { Badge } from "../ui/badge";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
 import { useThreadActionMenu } from "~/hooks/useThreadActionMenu";
+import { useThreadActions } from "~/hooks/useThreadActions";
+import { useThreadShell } from "../../state/entities";
 import { readLocalApi } from "~/localApi";
 import { threadEnvironment } from "../../state/threads";
 import { canShareWithGuestAtom } from "./guestShareAvailability";
@@ -198,6 +200,22 @@ export const ChatHeader = memo(function ChatHeader({
       }
     });
   };
+  const { pinThread, confirmAndUnpinThread } = useThreadActions();
+  const isPinned = useThreadShell(activeThreadRef)?.pinnedAt != null;
+  const togglePin = () => {
+    void (isPinned ? confirmAndUnpinThread(activeThreadRef) : pinThread(activeThreadRef)).then(
+      (result) => {
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add({
+            type: "error",
+            title: isPinned ? "Failed to unpin thread" : "Failed to pin thread",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          });
+        }
+      },
+    );
+  };
   const { openMenu, closeMenu } = useThreadActionMenu({
     threadRef: isServerThread ? activeThreadRef : null,
     projectCwd: activeProjectCwd,
@@ -354,6 +372,33 @@ export const ChatHeader = memo(function ChatHeader({
           </>
         ) : null}
         <WorkspaceBreadcrumbItem current className="min-w-10 flex-1">
+          {isServerThread && canOperateThread ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label={isPinned ? "Unpin thread" : "Pin thread"}
+                    aria-pressed={isPinned}
+                    onClick={togglePin}
+                    className={cn(
+                      "group/pin mr-1.5 inline-flex shrink-0 cursor-pointer items-center rounded-sm transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                      isPinned ? "text-foreground" : "text-muted-foreground/65",
+                    )}
+                  />
+                }
+              >
+                <PinIcon
+                  aria-hidden
+                  className={cn("size-3.5", isPinned && "group-hover/pin:hidden")}
+                />
+                {isPinned ? (
+                  <PinOffIcon aria-hidden className="hidden size-3.5 group-hover/pin:block" />
+                ) : null}
+              </TooltipTrigger>
+              <TooltipPopup side="top">{isPinned ? "Unpin thread" : "Pin thread"}</TooltipPopup>
+            </Tooltip>
+          ) : null}
           {renamingTitle !== null ? (
             <input
               autoFocus
