@@ -107,7 +107,10 @@ t3 thread list
 
 `.` means the project that contains the current folder; a project id also
 works. A new thread uses the project's default model and permission mode, and
-runs in the project folder unless you pass `--worktree <base-branch>`. `send`
+runs in the project folder unless you pass `--worktree <base-branch>`.
+`--provider <instance> --model <slug>` picks another model, and
+`--option <id>=<value>` sets one of its options, such as `reasoningEffort=high`;
+repeat it for more. `send`
 never interrupts: a busy thread gets the message as its next turn. Pass `-` as
 the message to read it from stdin.
 
