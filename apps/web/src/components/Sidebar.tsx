@@ -36,6 +36,12 @@ import {
 } from "@t3tools/client-runtime/state/thread-inbox";
 import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
 import {
+  EMPTY_SIDEBAR_THREAD_FILTER,
+  isSidebarThreadFilterActive,
+  matchesSidebarThreadFilter,
+  SidebarThreadFilterSection,
+} from "./sidebar/SidebarThreadFilters";
+import {
   nextShownOrder,
   threadSearchMatchKey,
   threadSearchSubject,
@@ -1016,6 +1022,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const environmentMachineById = useEnvironmentMachines();
   const projectGroupsRef = useRef(projectGroups);
   const persistedProjectScopeKeys = useUiStateStore((store) => store.sidebarProjectScopeKeys);
+  const [threadFilter, setThreadFilter] = useState(EMPTY_SIDEBAR_THREAD_FILTER);
   const setPersistedProjectScopeKeys = useUiStateStore((store) => store.setSidebarProjectScopeKeys);
   const [projectScopeMenuState, dispatchProjectScopeMenu] = useReducer(
     reduceSidebarProjectScopeMenuState,
@@ -1423,7 +1430,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     serverConfigs,
     connectedEnvironmentIds,
     optimisticDrop,
-    threads,
+    threads: isSidebarThreadFilterActive(threadFilter)
+      ? threads.filter((thread) => matchesSidebarThreadFilter(thread, threadFilter))
+      : threads,
     delegatedUnderParent,
     routeRowThreadKey,
     folderGroups: boringSidebarEnabled
@@ -3144,8 +3153,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                       <SidebarHeaderIconButton
                         label={
                           scopedProjectGroups.length > 0
-                            ? `Filter threads by project: ${scopedProjectGroups.map((project) => project.displayName).join(", ")}`
-                            : "Filter threads by project"
+                            ? `Filters: ${scopedProjectGroups.map((project) => project.displayName).join(", ")}`
+                            : "Filters"
                         }
                       />
                     }
@@ -3170,7 +3179,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         <ProjectFavicon project={scopedProjectGroups[0]} className="size-4" />
                       </span>
                     ) : (
-                      <ListFilterIcon className="size-4" />
+                      <ListFilterIcon
+                        className={cn(
+                          "size-4",
+                          isSidebarThreadFilterActive(threadFilter) && "text-primary",
+                        )}
+                      />
                     )}
                   </ComboboxTrigger>
                   {/* Refocusing the trigger after a pointer close shows its focus ring and opens its tooltip. */}
@@ -3300,6 +3314,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         );
                       }}
                     </ComboboxList>
+                    <SidebarThreadFilterSection
+                      threads={threads}
+                      providerEntriesByEnvironment={providerEntriesByEnvironment}
+                      filter={threadFilter}
+                      onFilterChange={setThreadFilter}
+                    />
                   </ComboboxPopup>
                 </Combobox>
               }
