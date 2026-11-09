@@ -43,19 +43,21 @@ silently leaving every phone unable to connect after a restart.
 three hosts without activating. Then choose how to switch, with `fleet-activate
 --version VERSION` or the same flags on `fleet`:
 
-| Flags                                 | Behavior                                                                                          |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| none                                  | Refuses unless every host is idle.                                                                |
-| `--when-idle-timeout SECONDS`         | Pauses new turns, waits for idle, then switches. On timeout it allows turns and switches nothing. |
-| `--when-idle-timeout SECONDS --force` | The same, but on timeout it restarts anyway.                                                      |
-| `--force`                             | Restarts now.                                                                                     |
+| Flags                                 | Behavior                                                                            |
+| ------------------------------------- | ----------------------------------------------------------------------------------- |
+| none                                  | Refuses unless every host is idle.                                                  |
+| `--when-idle-timeout SECONDS`         | Waits for idle, then pauses new turns and switches. On timeout it switches nothing. |
+| `--when-idle-timeout SECONDS --force` | The same, but on timeout it restarts anyway.                                        |
+| `--force`                             | Restarts now.                                                                       |
 
-The wait is at most four hours. During it, running turns and their child tasks,
-wakes and steers still work. New sends are refused with a message saying so, and
-due scheduled tasks wait. A timeout, Ctrl+C, or `scripts/fork-deploy
-fleet-activate-cancel` from another terminal allows turns again without switching
-anything. If the rollout itself dies, each host's hold expires by itself up to 15
-minutes after the timeout. A host only enforces the pause once it runs a build that
+The wait is at most four hours, and new turns stay allowed during it. When every
+host looks idle, the rollout pauses new turns everywhere, confirms that no turn started
+in between, and switches. If one did, it allows turns again and keeps waiting, so a
+fleet that never goes idle times out without switching. While paused, new sends are
+refused with a message saying so, and due scheduled tasks wait. A timeout, Ctrl+C, or `scripts/fork-deploy
+fleet-activate-cancel` from another terminal ends the rollout without switching
+anything. If the rollout itself dies during the switch, each host's pause expires by
+itself within 15 minutes. A host only enforces the pause once it runs a build that
 has it, so the first rollout to that build still needs an idle check at switch time.
 
 A forced restart relies on **Continue threads after restarts**. It prints the

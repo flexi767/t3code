@@ -1030,17 +1030,30 @@ fn activate_with(ver: &str, builds: &Path, helper: &str, activation: Activation)
         .collect();
     let mut hosts: Vec<&dyn drain::DrainHost> = vec![&local];
     hosts.extend(remotes.iter().map(|host| host as &dyn drain::DrainHost));
-    println!("New turns are paused. Waiting up to {timeout_seconds} seconds for running turns.");
     let owner = format!("fleet:{ver}:{}", std::process::id());
+    let wait = local.wait_path();
+    drain::acquire_hold(
+        &wait,
+        &owner,
+        timeout_seconds + drain::ACTIVATION_GRACE_SECONDS,
+        now_ms(),
+    )?;
+    println!(
+        "Waiting up to {timeout_seconds} seconds for running turns. New turns stay allowed until \
+         every host is idle, then pause only while switching."
+    );
+    let cancelled = || drain::interrupted() || !drain::holds(&wait, &owner, now_ms());
     let end = drain::drain_and_activate(
         &hosts,
         &owner,
         timeout_seconds,
         activation.force,
         &drain::SystemClock,
-        &drain::interrupted,
+        &cancelled,
         &mut |force| activate_fleet(ver, builds, helper, force),
-    )?;
+    );
+    let _ = drain::release_hold(&wait, &owner);
+    let end = end?;
     match end {
         drain::DrainEnd::Activated => Ok(()),
         drain::DrainEnd::TimedOut(waiting) => Err(format!(
@@ -1056,14 +1069,13 @@ fn activate_with(ver: &str, builds: &Path, helper: &str, activation: Activation)
 }
 fn cancel_when_idle() -> Result<()> {
     let local = drain::LocalHost::current("m5")?;
-    let Some(owner) = fs::read_to_string(local.hold_path())
-        .ok()
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-        .and_then(|value| value["owner"].as_str().map(str::to_string))
+    let Some(owner) =
+        drain::hold_owner(&local.wait_path()).or_else(|| drain::hold_owner(&local.hold_path()))
     else {
-        println!("No rollout is holding new turns on M5.");
+        println!("No rollout is waiting or holding new turns on M5.");
         return Ok(());
     };
+    drain::release_hold(&local.wait_path(), &owner)?;
     drain::release_hold(&local.hold_path(), &owner)?;
     // A dead rollout can't release the others, whose holds could otherwise last hours.
     let ver = owner.split(':').nth(1).ok_or("Unexpected hold owner")?;

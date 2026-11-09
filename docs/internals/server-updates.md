@@ -70,7 +70,9 @@ deployment helper runs outside the server and may reach it only over SSH. The ch
 inside the commit's `BEGIN IMMEDIATE`, and the helper takes that write lock once after
 writing the hold. A commit that passed the check therefore finishes before the helper
 counts active runs, and every later commit sees the hold. Checking outside the transaction
-would let a turn start after the count reported idle.
+would let a turn start after the count reported idle. The helper waits for idle without the
+hold and takes it only to confirm and switch, so a busy fleet never blocks new turns for the
+whole wait; a turn found by the confirming count releases the hold and the wait resumes.
 
 A launch checks the hold before creating its thread, so a refused first send leaves only
 the client's draft and any later retry can create the thread. A hold that starts just after the

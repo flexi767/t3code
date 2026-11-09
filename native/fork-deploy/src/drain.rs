@@ -9,9 +9,11 @@ use std::{
 };
 
 const HOLD_FILE: &str = "turn-admission-hold.json";
+/// Marks a waiting rollout without pausing turns, so a cancel can find and end it.
+const WAIT_FILE: &str = "fleet-activation-wait.json";
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// Covers activation after the wait; a dead deploy restores admission once this passes.
-const ACTIVATION_GRACE_SECONDS: u64 = 900;
+pub const ACTIVATION_GRACE_SECONDS: u64 = 900;
 pub const MAX_WAIT_SECONDS: u64 = 4 * 60 * 60;
 
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
@@ -60,7 +62,7 @@ pub fn acquire_hold(path: &Path, owner: &str, ttl_seconds: u64, now: u64) -> Res
             }
             match read_hold(path) {
                 Some((current, expires)) if expires > now && current != owner => {
-                    return Err(format!("Another rollout holds new turns: {current}").into());
+                    return Err(format!("Another rollout is in progress: {current}").into());
                 }
                 Some((current, expires)) if expires > now && current == owner => {
                     fs::rename(&temporary, path)?;
@@ -73,6 +75,13 @@ pub fn acquire_hold(path: &Path, owner: &str, ttl_seconds: u64, now: u64) -> Res
     })();
     let _ = fs::remove_file(&temporary);
     result
+}
+
+pub fn holds(path: &Path, owner: &str, now: u64) -> bool {
+    read_hold(path).is_some_and(|(current, expires)| current == owner && expires > now)
+}
+pub fn hold_owner(path: &Path) -> Option<String> {
+    read_hold(path).map(|(owner, _)| owner)
 }
 
 /// Only the owner can restore admission, so a late cleanup cannot end another rollout's hold.
@@ -92,7 +101,7 @@ pub enum Probe {
 /// Every commit that passed the old gate holds SQLite's write lock until it finishes. Taking the
 /// lock once after the hold exists means any later commit sees the hold, so the count is final.
 pub fn probe_at(hold: &Path, db: &Path, owner: &str, now: u64) -> Result<Probe> {
-    if !read_hold(hold).is_some_and(|(current, expires)| current == owner && expires > now) {
+    if !holds(hold, owner, now) {
         return Ok(Probe::HoldLost);
     }
     if sqlite_has_writer(db) {
@@ -114,6 +123,8 @@ pub trait DrainHost {
     fn hold(&self, owner: &str, ttl_seconds: u64) -> Result<()>;
     fn release(&self, owner: &str) -> Result<()>;
     fn probe(&self, owner: &str) -> Result<Probe>;
+    /// Active turns without pausing admission; only the held probe can prove a host idle.
+    fn count(&self) -> Result<u64>;
 }
 
 pub struct LocalHost {
@@ -129,6 +140,9 @@ impl LocalHost {
     }
     pub fn hold_path(&self) -> PathBuf {
         self.state_dir.join(HOLD_FILE)
+    }
+    pub fn wait_path(&self) -> PathBuf {
+        self.state_dir.join(WAIT_FILE)
     }
 }
 impl DrainHost for LocalHost {
@@ -148,6 +162,9 @@ impl DrainHost for LocalHost {
             owner,
             now_ms(),
         )
+    }
+    fn count(&self) -> Result<u64> {
+        active_turns_at(&self.state_dir.join("statev2.sqlite"))
     }
 }
 
@@ -182,6 +199,10 @@ impl DrainHost for RemoteHost {
     }
     fn probe(&self, owner: &str) -> Result<Probe> {
         parse_probe(&self.command(&["host-probe", "--owner", owner])?)
+    }
+    fn count(&self) -> Result<u64> {
+        let runs: Vec<Value> = serde_json::from_str(&self.command(&["host-active"])?)?;
+        Ok(runs.len() as u64)
     }
 }
 pub fn format_probe(probe: &Probe) -> String {
@@ -218,8 +239,10 @@ pub enum DrainEnd {
     Cancelled(String),
 }
 
-/// Waits for admitted turns and stops one only under `force_on_timeout`: every path that does not
-/// activate restores admission, and a probe that cannot prove a host idle counts as not idle.
+/// Waits for every host to look idle without pausing anything, then pauses all of them and
+/// confirms under the write lock before activating. A turn that slipped in before the pause
+/// ends the pause and the wait goes on. Only `force_on_timeout` stops a turn, and every path
+/// that does not activate restores admission; a probe that cannot prove a host idle counts as busy.
 pub fn drain_and_activate(
     hosts: &[&dyn DrainHost],
     owner: &str,
@@ -229,7 +252,7 @@ pub fn drain_and_activate(
     cancelled: &dyn Fn() -> bool,
     activate: &mut dyn FnMut(bool) -> Result<()>,
 ) -> Result<DrainEnd> {
-    let ttl = timeout_seconds + ACTIVATION_GRACE_SECONDS;
+    let ttl = ACTIVATION_GRACE_SECONDS;
     let release_all = |hosts: &[&dyn DrainHost]| {
         for host in hosts {
             if let Err(error) = host.release(owner) {
@@ -240,43 +263,57 @@ pub fn drain_and_activate(
             }
         }
     };
-    for (index, host) in hosts.iter().enumerate() {
-        if let Err(error) = host.hold(owner, ttl) {
-            release_all(&hosts[..index]);
-            return Err(error);
-        }
-    }
     let deadline = clock.now_ms() + timeout_seconds * 1000;
-    let end = loop {
+    loop {
         if cancelled() {
-            break Ok(DrainEnd::Cancelled("interrupted".into()));
+            return Ok(DrainEnd::Cancelled("interrupted".into()));
         }
+        let expired = clock.now_ms() >= deadline;
         let mut waiting = Vec::new();
+        for host in hosts {
+            match host.count() {
+                Ok(0) => {}
+                Ok(count) => waiting.push(format!("{}: {count}", host.name())),
+                Err(error) => waiting.push(format!("{}: {error}", host.name())),
+            }
+        }
+        if !waiting.is_empty() && !expired {
+            clock.sleep(POLL_INTERVAL);
+            continue;
+        }
+        if !waiting.is_empty() && !force_on_timeout {
+            return Ok(DrainEnd::TimedOut(waiting));
+        }
+        for (index, host) in hosts.iter().enumerate() {
+            if let Err(error) = host.hold(owner, ttl) {
+                release_all(&hosts[..index]);
+                return Err(error);
+            }
+        }
+        let mut busy = false;
         let mut lost = None;
         for host in hosts {
             match host.probe(owner) {
                 Ok(Probe::Active(0)) => {}
-                Ok(Probe::Active(count)) => waiting.push(format!("{}: {count}", host.name())),
                 Ok(Probe::HoldLost) => lost = Some(host.name().to_string()),
-                Err(error) => waiting.push(format!("{}: {error}", host.name())),
+                Ok(Probe::Active(_)) | Err(_) => busy = true,
             }
         }
-        if let Some(name) = lost {
-            break Ok(DrainEnd::Cancelled(format!("the hold on {name} ended")));
-        }
-        if waiting.is_empty() {
-            break activate(false).map(|()| DrainEnd::Activated);
-        }
-        if clock.now_ms() >= deadline {
-            if force_on_timeout {
-                break activate(true).map(|()| DrainEnd::Activated);
-            }
-            break Ok(DrainEnd::TimedOut(waiting));
+        let end = if let Some(name) = lost {
+            Some(Ok(DrainEnd::Cancelled(format!("the hold on {name} ended"))))
+        } else if !busy {
+            Some(activate(false).map(|()| DrainEnd::Activated))
+        } else if expired && force_on_timeout {
+            Some(activate(true).map(|()| DrainEnd::Activated))
+        } else {
+            None
+        };
+        release_all(hosts);
+        if let Some(end) = end {
+            return end;
         }
         clock.sleep(POLL_INTERVAL);
-    };
-    release_all(hosts);
-    end
+    }
 }
 
 #[cfg(test)]
@@ -322,6 +359,18 @@ mod tests {
         }
         fn probe(&self, _: &str) -> Result<Probe> {
             self.log.borrow_mut().push("probe".into());
+            self.next()
+        }
+        fn count(&self) -> Result<u64> {
+            self.log.borrow_mut().push("count".into());
+            match self.next()? {
+                Probe::Active(count) => Ok(count),
+                Probe::HoldLost => Ok(0),
+            }
+        }
+    }
+    impl FakeHost {
+        fn next(&self) -> Result<Probe> {
             let mut probes = self.probes.borrow_mut();
             if probes.len() > 1 {
                 probes.remove(0)
@@ -376,8 +425,32 @@ mod tests {
         let (end, activations) = run_drain(&[&m5, &j], 60);
         assert_eq!(end.unwrap(), DrainEnd::Activated);
         assert_eq!(activations, 1);
-        assert_eq!(j.log.borrow().first().unwrap(), "hold");
-        assert_eq!(j.log.borrow().last().unwrap(), "release");
+        assert_eq!(
+            *j.log.borrow(),
+            ["count", "count", "count", "hold", "probe", "release"],
+            "new turns stay allowed until every host looks idle"
+        );
+    }
+    #[test]
+    fn a_turn_that_starts_before_the_pause_keeps_the_rollout_waiting() {
+        let m5 = fake(
+            "m5",
+            vec![
+                Ok(Probe::Active(0)),
+                Ok(Probe::Active(1)),
+                Ok(Probe::Active(1)),
+                Ok(Probe::Active(0)),
+            ],
+        );
+        let (end, activations) = run_drain(&[&m5], 60);
+        assert_eq!(end.unwrap(), DrainEnd::Activated);
+        assert_eq!(activations, 1);
+        assert_eq!(
+            *m5.log.borrow(),
+            [
+                "count", "hold", "probe", "release", "count", "count", "hold", "probe", "release"
+            ]
+        );
     }
     #[test]
     fn timeout_never_activates_and_restores_admission() {
@@ -387,7 +460,7 @@ mod tests {
         assert_eq!(end.unwrap(), DrainEnd::TimedOut(vec!["j: 3".into()]));
         assert_eq!(activations, 0);
         for host in [&m5, &j] {
-            assert_eq!(host.log.borrow().last().unwrap(), "release");
+            assert!(!host.log.borrow().contains(&"hold".to_string()));
         }
     }
     #[test]
@@ -443,7 +516,7 @@ mod tests {
             &mut activate,
         );
         assert_eq!(end.unwrap(), DrainEnd::Cancelled("interrupted".into()));
-        assert_eq!(m5.log.borrow().last().unwrap(), "release");
+        assert!(!m5.log.borrow().contains(&"hold".to_string()));
     }
     #[test]
     fn a_refused_hold_releases_earlier_hosts_without_waiting() {
@@ -453,7 +526,7 @@ mod tests {
         let (end, activations) = run_drain(&[&m5, &j], 60);
         assert!(end.is_err());
         assert_eq!(activations, 0);
-        assert_eq!(*m5.log.borrow(), vec!["hold", "release"]);
+        assert_eq!(*m5.log.borrow(), vec!["count", "hold", "release"]);
     }
     #[test]
     fn a_failed_activation_still_restores_admission() {
@@ -559,6 +632,10 @@ mod tests {
                 self.1.get()
             }
             fn sleep(&self, duration: Duration) {
+                assert!(
+                    !self.0.with_file_name(HOLD_FILE).exists(),
+                    "new turns stay allowed while a run is active"
+                );
                 self.1.set(self.1.get() + duration.as_millis() as u64);
                 crate::run(
                     "sqlite3",
