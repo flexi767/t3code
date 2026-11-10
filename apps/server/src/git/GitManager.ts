@@ -115,6 +115,7 @@ export type GitBranchPullRequest = NonNullable<VcsStatusResult["pr"]> & {
 
 interface SourceControlTextGenerationSettings {
   readonly modelSelection: ModelSelection;
+  readonly projectId: ProjectId | null;
   readonly style: SourceControlWritingStyleSettings;
 }
 
@@ -2157,6 +2158,7 @@ export const make = Effect.gen(function* () {
           ...(input.includeBranch ? { includeBranch: true } : {}),
           ...(policy ? { policy } : {}),
           modelSelection: input.settings.modelSelection,
+          projectId: input.settings.projectId,
         })
         .pipe(Effect.map((result) => sanitizeCommitMessage(result)));
 
@@ -2387,6 +2389,7 @@ export const make = Effect.gen(function* () {
       ...(threadContext ? { threadContext } : {}),
       ...(policy ? { policy } : {}),
       modelSelection: settings.modelSelection,
+      projectId: settings.projectId,
     });
 
     const bodyFile = path.join(
@@ -3237,6 +3240,7 @@ export const make = Effect.gen(function* () {
             settings.sourceControlWriterModelSelection === null
               ? Effect.succeed({
                   modelSelection: settings.textGenerationModelSelection,
+                  projectId,
                   style: settings.sourceControlWritingStyle,
                 })
               : providerRegistry.getProviders.pipe(
@@ -3246,6 +3250,7 @@ export const make = Effect.gen(function* () {
                       providers,
                       projectId,
                     ),
+                    projectId,
                     style: settings.sourceControlWritingStyle,
                   })),
                 ),
