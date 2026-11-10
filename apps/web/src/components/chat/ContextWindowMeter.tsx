@@ -214,7 +214,3 @@ export function ContextWindowMeter(props: {
     </Popover>
   );
 }
-
-export function ContextWindowMeterPlaceholder() {
-  return <span aria-hidden="true" className="size-7 shrink-0" />;
-}
