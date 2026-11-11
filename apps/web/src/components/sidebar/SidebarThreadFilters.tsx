@@ -84,7 +84,7 @@ export function matchesSidebarThreadFilter(
 const dollars = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
-  maximumFractionDigits: 2,
+  maximumFractionDigits: 0,
 });
 
 function costStep(max: number): number {
@@ -101,11 +101,10 @@ function CostRangeFilter(props: {
   const [low, high] = props.value ?? [0, max];
   return (
     <>
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-muted-foreground">Price</span>
-        <span className="text-xs text-muted-foreground tabular-nums">
-          {dollars.format(low)} – {dollars.format(Math.min(high, props.max))}
-        </span>
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center text-xs text-muted-foreground tabular-nums">
+        <span>{dollars.format(low)}</span>
+        <span className="font-medium">Price</span>
+        <span className="text-right">{dollars.format(Math.min(high, max))}</span>
       </div>
       <Slider.Root
         min={0}
