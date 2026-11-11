@@ -469,10 +469,10 @@ impl ServiceControl for InstalledService {
             {
                 run("launchctl", &["bootout", &domain, s(&service_path()?)])?;
             }
-            Ok(())
         } else {
-            run("systemctl", &["--user", "stop", "t3code"])
+            run("systemctl", &["--user", "stop", "t3code"])?;
         }
+        stop_stray_owner(&home()?.join(".t3/userdata/server-runtime.json"))
     }
     fn start(&self) -> Result<()> {
         if cfg!(target_os = "macos") {
@@ -494,6 +494,37 @@ impl ServiceControl for InstalledService {
     fn verify(&self, ver: &str) -> Result<()> {
         verify(ver)
     }
+}
+/// A server an SSH client launched while the service was down outlives the service stop and keeps
+/// the home's owner lock, so the new version could never start.
+fn stray_owner(record: &str, command_of: impl Fn(u32) -> Option<String>) -> Option<u32> {
+    let pid = u32::try_from(serde_json::from_str::<Value>(record).ok()?["pid"].as_u64()?).ok()?;
+    let command = command_of(pid)?;
+    (command.contains("/runtime/versions/") && command.contains(" serve")).then_some(pid)
+}
+fn process_command(pid: u32) -> Option<String> {
+    output("ps", &["-o", "command=", "-p", &pid.to_string()])
+        .ok()
+        .filter(|command| !command.is_empty())
+}
+fn stop_stray_owner(record: &Path) -> Result<()> {
+    let Some(pid) = fs::read_to_string(record)
+        .ok()
+        .and_then(|text| stray_owner(&text, process_command))
+    else {
+        return Ok(());
+    };
+    println!("Stopping server {pid}, which still owns the T3 home");
+    // It may exit on its own before the signal lands.
+    let _ = run("kill", &["-TERM", &pid.to_string()]);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while process_command(pid).is_some() {
+        if Instant::now() >= deadline {
+            return Err(format!("Server {pid} still owns the T3 home after SIGTERM").into());
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    Ok(())
 }
 struct SwitchPaths {
     service: PathBuf,
@@ -1523,6 +1554,20 @@ mod tests {
             (service.to_string(), "1.2.3".to_string())
         );
         assert_ne!(service_with_version(service, "1.2.4").unwrap().0, service);
+    }
+    #[test]
+    fn only_a_live_t3_server_named_by_the_runtime_record_is_stopped() {
+        let record = r#"{"pid":6236,"port":3773}"#;
+        let ssh_launched =
+            |_| Some("/h/.t3/runtime/versions/1.0.0/t3 serve --host 127.0.0.1 --port 3773".into());
+        assert_eq!(stray_owner(record, ssh_launched), Some(6236));
+        assert_eq!(stray_owner(record, |_| None), None);
+        assert_eq!(
+            stray_owner(record, |_| Some("/usr/bin/vim notes".into())),
+            None
+        );
+        assert_eq!(stray_owner("not json", ssh_launched), None);
+        assert_eq!(stray_owner(r#"{"port":3773}"#, ssh_launched), None);
     }
     #[test]
     fn a_retry_treats_only_a_covering_receipt_as_already_active() {
