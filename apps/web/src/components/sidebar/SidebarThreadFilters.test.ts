@@ -56,8 +56,14 @@ describe("matchesSidebarThreadFilter", () => {
   });
   const claudeStopped = thread({ provider: "claude", model: "opus", runStatus: "interrupted" });
   const all = [codexDone, codexMini, claudeWorking, claudeStopped];
+  // claudeWorking has no recorded usage.
+  const costs = new Map([
+    [codexDone, 0.5],
+    [codexMini, 3],
+    [claudeStopped, 12],
+  ]);
   const matching = (value: SidebarThreadFilter) =>
-    all.filter((candidate) => matchesSidebarThreadFilter(candidate, value));
+    all.filter((candidate) => matchesSidebarThreadFilter(candidate, value, costs.get(candidate)));
 
   it.each([
     ["no filter", filter({}), [codexDone, codexMini, claudeWorking, claudeStopped]],
@@ -74,6 +80,8 @@ describe("matchesSidebarThreadFilter", () => {
       filter({ providers: new Set(["codex"]), statuses: new Set(["failed", "working"]) }),
       [codexMini],
     ],
+    ["a price range is inclusive", filter({ costRange: [0.5, 3] }), [codexDone, codexMini]],
+    ["no recorded usage costs nothing", filter({ costRange: [0, 0] }), [claudeWorking]],
   ] as const)("%s", (_name, value, expected) => {
     expect(matching(value)).toEqual(expected);
   });

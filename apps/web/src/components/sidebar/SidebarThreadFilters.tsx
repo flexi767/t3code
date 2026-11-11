@@ -1,7 +1,9 @@
+import { Slider } from "@base-ui/react/slider";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { isThreadWorking } from "@t3tools/client-runtime/state/thread-inbox";
 
 import { cn } from "~/lib/utils";
+import type { ThreadCosts } from "~/state/sessionUsage";
 import { getTriggerDisplayModelName } from "../chat/providerIconUtils";
 import type { SidebarProviderEntry } from "./SidebarThreadRow";
 
@@ -12,12 +14,15 @@ export interface SidebarThreadFilter {
   /** `${providerInstanceId}:${model}`; a provider with none selected matches all its models. */
   readonly models: ReadonlySet<string>;
   readonly statuses: ReadonlySet<SidebarThreadStatusFilter>;
+  /** Inclusive dollars; null matches every cost. */
+  readonly costRange: readonly [number, number] | null;
 }
 
 export const EMPTY_SIDEBAR_THREAD_FILTER: SidebarThreadFilter = {
   providers: new Set(),
   models: new Set(),
   statuses: new Set(),
+  costRange: null,
 };
 
 const STATUS_OPTIONS: ReadonlyArray<{ value: SidebarThreadStatusFilter; label: string }> = [
@@ -30,7 +35,7 @@ type SidebarFilterThread = Parameters<typeof isThreadWorking>[0] &
   Pick<EnvironmentThreadShell, "modelSelection">;
 
 export function isSidebarThreadFilterActive(filter: SidebarThreadFilter): boolean {
-  return filter.providers.size > 0 || filter.statuses.size > 0;
+  return filter.providers.size > 0 || filter.statuses.size > 0 || filter.costRange !== null;
 }
 
 function threadProvider(thread: SidebarFilterThread): string {
@@ -44,10 +49,20 @@ function sidebarThreadStatus(thread: SidebarFilterThread): SidebarThreadStatusFi
   return null;
 }
 
+export function threadCostKey(thread: Pick<EnvironmentThreadShell, "environmentId" | "id">) {
+  return `${thread.environmentId}:${thread.id}`;
+}
+
 export function matchesSidebarThreadFilter(
   thread: SidebarFilterThread,
   filter: SidebarThreadFilter,
+  /** A thread with no recorded usage has cost nothing. */
+  cost = 0,
 ): boolean {
+  if (filter.costRange !== null) {
+    const [min, max] = filter.costRange;
+    if (cost < min || cost > max) return false;
+  }
   if (filter.providers.size > 0) {
     const provider = threadProvider(thread);
     if (!filter.providers.has(provider)) return false;
@@ -64,6 +79,61 @@ export function matchesSidebarThreadFilter(
     if (status === null || !filter.statuses.has(status)) return false;
   }
   return true;
+}
+
+const dollars = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  maximumFractionDigits: 2,
+});
+
+function costStep(max: number): number {
+  if (max <= 1) return 0.01;
+  return max <= 20 ? 0.1 : 1;
+}
+
+function CostRangeFilter(props: {
+  max: number;
+  value: readonly [number, number] | null;
+  onChange: (value: readonly [number, number] | null) => void;
+}) {
+  const { max, onChange } = props;
+  const [low, high] = props.value ?? [0, max];
+  return (
+    <>
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium text-muted-foreground">Price</span>
+        <span className="text-xs text-muted-foreground tabular-nums">
+          {dollars.format(low)} – {dollars.format(Math.min(high, props.max))}
+        </span>
+      </div>
+      <Slider.Root
+        min={0}
+        max={props.max}
+        step={costStep(props.max)}
+        value={[low, Math.min(high, props.max)]}
+        onValueChange={(next) => {
+          const nextLow = next[0] ?? 0;
+          const nextHigh = next[1] ?? max;
+          onChange(nextLow <= 0 && nextHigh >= max ? null : [nextLow, nextHigh]);
+        }}
+      >
+        <Slider.Control className="flex w-full touch-none items-center px-1.5 py-1.5 select-none">
+          <Slider.Track className="relative h-1 w-full rounded-full bg-muted">
+            <Slider.Indicator className="rounded-full bg-primary" />
+            {(["Minimum price", "Maximum price"] as const).map((label, index) => (
+              <Slider.Thumb
+                key={label}
+                index={index}
+                aria-label={label}
+                className="size-3 rounded-full border border-primary bg-background focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+              />
+            ))}
+          </Slider.Track>
+        </Slider.Control>
+      </Slider.Root>
+    </>
+  );
 }
 
 function toggled<T>(set: ReadonlySet<T>, value: T): ReadonlySet<T> {
@@ -93,10 +163,17 @@ function FilterChip(props: { selected: boolean; onClick: () => void; children: s
 export function SidebarThreadFilterSection(props: {
   threads: readonly EnvironmentThreadShell[];
   providerEntriesByEnvironment: ReadonlyMap<string, ReadonlyMap<string, SidebarProviderEntry>>;
+  threadCosts: ThreadCosts;
   filter: SidebarThreadFilter;
   onFilterChange: (filter: SidebarThreadFilter) => void;
 }) {
   const { filter, onFilterChange } = props;
+  let maxCost = 0;
+  for (const thread of props.threads) {
+    maxCost = Math.max(maxCost, props.threadCosts.get(threadCostKey(thread)) ?? 0);
+  }
+  // Whole dollars keep the scale readable; under a dollar it stays in cents.
+  maxCost = maxCost > 1 ? Math.ceil(maxCost) : Math.ceil(maxCost * 100) / 100;
   const providers = new Map<string, { label: string; models: Map<string, string> }>();
   for (const thread of props.threads) {
     const instanceId = threadProvider(thread);
@@ -194,6 +271,13 @@ export function SidebarThreadFilterSection(props: {
           </FilterChip>
         ))}
       </div>
+      {maxCost > 0 || filter.costRange !== null ? (
+        <CostRangeFilter
+          max={Math.max(maxCost, filter.costRange?.[1] ?? 0)}
+          value={filter.costRange}
+          onChange={(costRange) => onFilterChange({ ...filter, costRange })}
+        />
+      ) : null}
     </div>
   );
 }

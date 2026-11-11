@@ -1,4 +1,5 @@
 import { attachSidebarTree } from "../lib/sidebarTree";
+import { useThreadCosts } from "../state/sessionUsage";
 import { type EnvironmentId, type ScopedProjectRef } from "@t3tools/contracts";
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import {
@@ -38,6 +39,7 @@ import {
   EMPTY_SIDEBAR_THREAD_FILTER,
   isSidebarThreadFilterActive,
   matchesSidebarThreadFilter,
+  threadCostKey,
   SidebarThreadFilterSection,
 } from "./sidebar/SidebarThreadFilters";
 import {
@@ -1118,6 +1120,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           ),
         );
   const threads = useQuietThreadShells();
+  const threadCosts = useThreadCosts(
+    connectedEnvironmentIds,
+    projectScopeMenuState.open || threadFilter.costRange !== null,
+  );
   const subthreadsByParent = groupSidebarSubthreads(threads);
   const nestedThreadKeys = new Set(
     [...subthreadsByParent.values()].flatMap((children) => children.map(threadShellKey)),
@@ -1432,7 +1438,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     connectedEnvironmentIds,
     optimisticDrop,
     threads: isSidebarThreadFilterActive(threadFilter)
-      ? threads.filter((thread) => matchesSidebarThreadFilter(thread, threadFilter))
+      ? threads.filter((thread) =>
+          matchesSidebarThreadFilter(thread, threadFilter, threadCosts.get(threadCostKey(thread))),
+        )
       : threads,
     delegatedUnderParent,
     routeRowThreadKey,
@@ -3328,6 +3336,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                     </ComboboxList>
                     <SidebarThreadFilterSection
                       threads={threads}
+                      threadCosts={threadCosts}
                       providerEntriesByEnvironment={providerEntriesByEnvironment}
                       filter={threadFilter}
                       onFilterChange={setThreadFilter}
