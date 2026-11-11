@@ -95,8 +95,12 @@ A server host that doesn't report the new version within five minutes is rolled
 back automatically: its previous service definition, CLI link and database backup
 (the first snapshot, taken after the old server stopped) return, and the old version
 restarts. M5 does the same with its previous app. Other hosts are not rolled back, so
-the error can leave the fleet on mixed versions. Retrying with `fleet-activate` is safe:
-an installed fleet is left alone and a host already on the version is only verified.
+the error can leave the fleet on mixed versions. Before the backup and before a
+restore, the switch also stops a leftover `t3 serve` that still owns the T3 home,
+such as one the desktop started over SSH while the service was down. If it won't
+exit, the rollback stops there and leaves the database and backup for you to restore.
+Retrying with `fleet-activate` is safe: an installed fleet is left alone, and a host
+already on the version is only verified, then restarted once if it doesn't answer.
 `fleet` itself needs a new version.
 
 These are the deploy tool's rollbacks. M3 and J run `t3 serve`

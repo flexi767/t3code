@@ -499,8 +499,12 @@ impl ServiceControl for InstalledService {
 /// the home's owner lock, so the new version could never start.
 fn stray_owner(record: &str, command_of: impl Fn(u32) -> Option<String>) -> Option<u32> {
     let pid = u32::try_from(serde_json::from_str::<Value>(record).ok()?["pid"].as_u64()?).ok()?;
-    let command = command_of(pid)?;
-    (command.contains("/runtime/versions/") && command.contains(" serve")).then_some(pid)
+    command_of(pid)
+        .is_some_and(|command| is_t3_server(&command))
+        .then_some(pid)
+}
+fn is_t3_server(command: &str) -> bool {
+    command.contains("/runtime/versions/") && command.contains(" serve")
 }
 fn process_command(pid: u32) -> Option<String> {
     output("ps", &["-o", "command=", "-p", &pid.to_string()])
@@ -518,7 +522,8 @@ fn stop_stray_owner(record: &Path) -> Result<()> {
     // It may exit on its own before the signal lands.
     let _ = run("kill", &["-TERM", &pid.to_string()]);
     let deadline = Instant::now() + Duration::from_secs(60);
-    while process_command(pid).is_some() {
+    // An exited server its parent hasn't reaped yet no longer reads as one.
+    while process_command(pid).is_some_and(|command| is_t3_server(&command)) {
         if Instant::now() >= deadline {
             return Err(format!("Server {pid} still owns the T3 home after SIGTERM").into());
         }
@@ -543,6 +548,12 @@ fn switch_service(ver: &str, paths: &SwitchPaths, control: &impl ServiceControl)
     if previous == ver {
         link_at(&paths.launcher, &paths.runtime.join("t3"))?;
         control.start()?;
+        if control.verify(ver).is_ok() {
+            return Ok(());
+        }
+        // A stray server can still hold the home's lock; stopping a healthy service here would cut live turns.
+        control.stop()?;
+        control.start()?;
         return control.verify(ver);
     }
     control.stop()?;
@@ -559,7 +570,10 @@ fn switch_service(ver: &str, paths: &SwitchPaths, control: &impl ServiceControl)
         Ok(()) => return Ok(()),
         Err(error) => error,
     };
-    let _ = control.stop();
+    // A server still writing would corrupt the restore and answer the rollback's check.
+    control.stop().map_err(|stop| {
+        format!("{ver} failed ({failure}); rollback stopped before restoring: {stop}")
+    })?;
     restore_database(&paths.db, &paths.backup)?;
     fs::write(&paths.service, original)?;
     if let Some(link) = previous_link {
@@ -1764,11 +1778,17 @@ mod tests {
     struct FakeService {
         db: PathBuf,
         bad_version: &'static str,
+        /// The second stop fails, as when a stray server outlives SIGTERM.
+        stuck_stop: bool,
         log: std::cell::RefCell<Vec<String>>,
     }
     impl ServiceControl for FakeService {
         fn stop(&self) -> Result<()> {
+            let stopped_before = self.log.borrow().iter().any(|entry| entry == "stop");
             self.log.borrow_mut().push("stop".into());
+            if self.stuck_stop && stopped_before {
+                return Err("server still owns the T3 home".into());
+            }
             Ok(())
         }
         fn start(&self) -> Result<()> {
@@ -1779,7 +1799,7 @@ mod tests {
             self.log.borrow_mut().push(format!("verify {ver}"));
             if ver == self.bad_version {
                 // What a failed version's migrations leave behind.
-                run("sqlite3", &[s(&self.db), "CREATE TABLE migrated(x);"])?;
+                run("sqlite3", &[s(&self.db), "CREATE TABLE IF NOT EXISTS migrated(x);"])?;
                 return Err("never came up".into());
             }
             Ok(())
@@ -1811,6 +1831,7 @@ mod tests {
         let control = FakeService {
             db: db.clone(),
             bad_version: bad,
+            stuck_stop: false,
             log: Default::default(),
         };
         let error = switch_service(bad, &paths, &control)
@@ -1856,19 +1877,65 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]
+    fn a_rollback_whose_stop_fails_leaves_the_database_and_backup_alone() {
+        let dir = temporary("stuck-rollback");
+        let db = run_database(&dir);
+        let paths = switch_fixture(&dir, &db);
+        let bad = "2.0.0-preview.20260101.1";
+        let control = FakeService {
+            db: db.clone(),
+            bad_version: bad,
+            stuck_stop: true,
+            log: Default::default(),
+        };
+        let error = switch_service(bad, &paths, &control)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("rollback stopped before restoring"),
+            "{error}"
+        );
+        assert!(paths.backup.join("statev2.sqlite").exists());
+        assert_eq!(
+            *control.log.borrow(),
+            ["stop", "start", &format!("verify {bad}"), "stop"]
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
     fn switching_to_the_running_version_only_restarts_and_verifies_so_retries_are_safe() {
         let dir = temporary("retry");
         let db = run_database(&dir);
         let paths = switch_fixture(&dir, &db);
+        let running = "1.0.0-preview.20260101.1";
         let control = FakeService {
             db: db.clone(),
             bad_version: "",
+            stuck_stop: false,
             log: Default::default(),
         };
-        switch_service("1.0.0-preview.20260101.1", &paths, &control).unwrap();
+        switch_service(running, &paths, &control).unwrap();
         assert_eq!(
             *control.log.borrow(),
-            ["start", "verify 1.0.0-preview.20260101.1"]
+            ["start", &format!("verify {running}")]
+        );
+        // Only a version that doesn't answer is stopped, which clears a stray holding the home.
+        let blocked = FakeService {
+            db: db.clone(),
+            bad_version: running,
+            stuck_stop: false,
+            log: Default::default(),
+        };
+        assert!(switch_service(running, &paths, &blocked).is_err());
+        assert_eq!(
+            *blocked.log.borrow(),
+            [
+                "start",
+                &format!("verify {running}"),
+                "stop",
+                "start",
+                &format!("verify {running}")
+            ]
         );
         fs::remove_dir_all(dir).unwrap();
     }
