@@ -59,6 +59,7 @@ import { makeThreadFixture, type ThreadFixtureOverrides } from "../test-fixtures
 import {
   completeSidebarRouteReveal,
   pendingSidebarRouteReveal,
+  observeSidebarDraftPromotion,
   resolveSidebarRouteReveal,
 } from "./sidebar/routeReveal";
 
@@ -550,7 +551,7 @@ describe("resolveThreadStatusPill", () => {
         },
       }),
     ).toMatchObject({
-      label: "Waiting",
+      label: "Monitoring",
       colorClass: "text-sidebar-muted-foreground",
       dotClass: "bg-sidebar-muted-foreground",
       pulse: false,
@@ -1049,7 +1050,7 @@ describe("unseen completion with background work", () => {
       task: { kind: "command", awaited: true },
       status: "waiting",
       receded: true,
-      pill: "Waiting",
+      pill: "Monitoring",
     },
   ] as const)("presents a completed thread with a $roster roster", (expected) => {
     const thread = presentThreadShell(localEnvironmentId, {
@@ -1597,6 +1598,21 @@ describe("resolveSidebarRouteReveal", () => {
     expect(
       resolveSidebarRouteReveal({
         reveal: { observedKey: hiddenKey, pendingKey: null },
+        routeKey: hiddenKey,
+        isSearching: false,
+        scopedProjectKeys,
+        delegatedUnderParent: new Set(),
+        findThread,
+      }),
+    ).toEqual({ pendingKey: null, widensScope: false });
+  });
+
+  it("never reveals the thread an open draft became", () => {
+    const reveal = { observedKey: "environment-test:other", pendingKey: null };
+    observeSidebarDraftPromotion(reveal, hiddenKey);
+    expect(
+      resolveSidebarRouteReveal({
+        reveal,
         routeKey: hiddenKey,
         isSearching: false,
         scopedProjectKeys,

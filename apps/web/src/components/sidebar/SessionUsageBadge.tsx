@@ -82,15 +82,16 @@ export function SessionUsageBadge({
         )}
         <span>{price}</span>
         {burningFast ? (
-          <span className="text-destructive font-bold" aria-label="High spending rate">
+          <span className="text-destructive" aria-label="High spending rate">
             !
           </span>
         ) : null}
       </TooltipTrigger>
-      <TooltipPopup side="right" align="start" sideOffset={4} anchor={rowAnchor} variant="glass">
+      <TooltipPopup side="right" align="start" sideOffset={4} anchor={rowAnchor} variant="thread">
         {usage ? (
-          <div className="flex max-w-72 flex-col items-start gap-1 text-xs tabular-nums">
-            <span className="font-medium">Session usage · API-equivalent USD estimate</span>
+          <div className="flex max-w-72 flex-col items-start gap-1 text-caption tabular-nums">
+            <span className="text-label">Session usage</span>
+            <span>API-equivalent USD estimate</span>
             {burningFast ? (
               <span className="text-destructive">
                 High spending: ${sample.rate.toFixed(2)}/min (warning at $1/min).
@@ -118,7 +119,7 @@ export function SessionUsageBadge({
                   <span className="text-right">{money.format(usage.unsplitCostUsd)}</span>
                 </>
               ) : null}
-              <span className="col-span-2 font-medium">Total</span>
+              <span className="col-span-2 text-label">Total</span>
               <span className="text-right">
                 {usage.unpricedRecords > 0
                   ? `At least ${money.format(usage.costUsd)}`

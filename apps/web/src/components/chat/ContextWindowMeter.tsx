@@ -8,6 +8,8 @@ import {
 } from "./ContextWindowMeter.logic";
 import { Minimize2Icon } from "lucide-react";
 import { composerFloatingLayerProps } from "./composerEventScope";
+import { contextWindowSegments } from "./compaction.logic";
+import { cn } from "~/lib/utils";
 
 function formatPercentage(value: number | null): string | null {
   if (value === null || !Number.isFinite(value)) {
@@ -136,7 +138,7 @@ export function ContextWindowMeter(props: {
                 Compact
               </Button>
               {compactDisabled && compactDisabledReason ? (
-                <div className="text-secondary-label text-2xs leading-tight">
+                <div className="text-secondary-label text-caption leading-tight">
                   {compactDisabledReason}
                 </div>
               ) : null}
@@ -145,16 +147,15 @@ export function ContextWindowMeter(props: {
           {missing ? null : (
             <div className="flex items-center justify-between gap-2">
               {usage.maxTokens !== null && usedPercentage ? (
-                <div className="text-secondary-label text-2xs tabular-nums">
+                <div className="flex gap-2 text-secondary-label text-caption tabular-nums">
                   <span>{usedPercentage}</span>
-                  <span className="mx-1">·</span>
                   <span>
                     {formatContextWindowTokens(usage.usedTokens)}/
                     {formatContextWindowTokens(usage.maxTokens ?? null)}
                   </span>
                 </div>
               ) : (
-                <div className="text-secondary-label text-2xs tabular-nums">
+                <div className="text-secondary-label text-caption tabular-nums">
                   {formatContextWindowTokens(usage.usedTokens)}
                 </div>
               )}
@@ -176,15 +177,15 @@ export function ContextWindowMeter(props: {
             </div>
           ) : null}
           {showTotalProcessed ? (
-            <div className="flex items-center justify-between gap-3 text-2xs leading-4">
+            <div className="flex items-center justify-between gap-3 text-caption leading-4">
               <span className="text-secondary-label">Total processed</span>
-              <span className="font-medium tabular-nums text-secondary-label">
+              <span className="tabular-nums text-secondary-label">
                 {formatContextWindowTokens(totalProcessedTokens)}
               </span>
             </div>
           ) : null}
           {usage.maxTokens != null ? (
-            <div className="flex items-center justify-between gap-3 text-2xs">
+            <div className="flex items-center justify-between gap-3 text-caption">
               <span>Remaining</span>
               <span>
                 {formatContextWindowTokens(Math.max(0, usage.maxTokens - usage.usedTokens))}
@@ -192,25 +193,77 @@ export function ContextWindowMeter(props: {
             </div>
           ) : null}
           {usage.updatedAt ? (
-            <div className="text-secondary-label text-2xs">
+            <div className="text-secondary-label text-caption">
               Updated {new Date(usage.updatedAt).toLocaleString()}
             </div>
           ) : null}
           {usage.cost != null ? (
-            <div className="flex items-center justify-between gap-3 text-2xs leading-4">
+            <div className="flex items-center justify-between gap-3 text-caption leading-4">
               <span className="text-secondary-label">Cost</span>
-              <span className="font-medium tabular-nums text-secondary-label">
+              <span className="tabular-nums text-secondary-label">
                 {formatContextWindowCost(usage.cost)}
               </span>
             </div>
           ) : null}
           {usage.compactsAutomatically ? (
-            <div className="mt-1 text-pretty text-secondary-label text-2xs font-medium">
+            <div className="mt-1 text-pretty text-secondary-label text-caption">
               {formatContextWindowCompactionMessage(modelDisplayName, usage.autoCompactThreshold)}
             </div>
           ) : null}
         </div>
       </PopoverPopup>
     </Popover>
+  );
+}
+
+/** The details row can reserve visible notches without changing the used/max fill. */
+export function ContextWindowSegments({
+  usage,
+  minSegmentWidth = 0,
+}: {
+  usage: ContextWindowSnapshot;
+  minSegmentWidth?: number;
+}) {
+  const percentage = Math.max(0, Math.min(100, usage.usedPercentage ?? 0));
+  const segments = contextWindowSegments(usage);
+  const largest = segments.reduce((max, segment) => Math.max(max, segment.tokens), 0);
+  const largestIndex = segments.findIndex((segment) => segment.tokens === largest);
+  // When the entire used fill is tiny, scale gaps and minimums down together.
+  const gap = `min(1px, calc(100% / ${segments.length * 2 - 1}))`;
+  const available = `(100% - ${segments.length - 1} * ${gap})`;
+  const minimum = `min(${minSegmentWidth}px, calc(${available} / ${segments.length}))`;
+  return (
+    <span
+      className="block h-1 min-w-0 overflow-hidden rounded-full bg-black/10 dark:bg-white/[0.063]"
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(percentage)}
+      aria-label="Context window usage"
+    >
+      <span
+        className="flex h-full gap-px overflow-hidden"
+        style={{ width: `${percentage}%`, ...(minSegmentWidth > 0 ? { gap } : {}) }}
+      >
+        {segments.map((segment, index) => (
+          <span
+            key={segment.label}
+            className={cn("h-full min-w-0 basis-0", segment.color)}
+            style={
+              minSegmentWidth > 0
+                ? {
+                    minWidth: minimum,
+                    flexGrow: index === largestIndex ? 1 : 0,
+                    flexBasis:
+                      index === largestIndex
+                        ? 0
+                        : `max(${minimum}, calc(${available} * ${segment.tokens / Math.max(1, usage.usedTokens)}))`,
+                  }
+                : { flexGrow: segment.tokens }
+            }
+          />
+        ))}
+      </span>
+    </span>
   );
 }

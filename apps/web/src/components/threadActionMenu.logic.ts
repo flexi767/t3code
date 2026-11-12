@@ -194,7 +194,8 @@ export function buildThreadActionMenuItems(
                 children: [
                   ...state.snoozePresets.map((preset) => ({
                     id: `snooze:${preset.id}` as const,
-                    label: `${preset.label} (${preset.whenLabel})`,
+                    label: preset.label,
+                    detail: preset.whenLabel,
                   })),
                   {
                     id: "snooze:custom" as const,
@@ -224,9 +225,7 @@ export function buildThreadActionMenuItems(
       ? [
           {
             id: "filter-by-project" as const,
-            label: state.projectFilter.isActive
-              ? "Show all projects"
-              : `Filter by ${state.projectFilter.label}`,
+            label: state.projectFilter.isActive ? "Show all projects" : "Show only this project",
             icon: "folder-tree",
           },
         ]

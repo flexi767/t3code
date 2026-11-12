@@ -232,10 +232,10 @@ export function useComposerAttachmentIntake(input: {
         toastManager.add({
           type: "info",
           title: `Large paste attached as ${attached.name}`,
-          description: `${formatAttachmentSize(attached.sizeBytes)} · Use ${
+          description: `Use ${
             isMacPlatform(navigator.platform) ? "⌘⇧V" : "Ctrl+Shift+V"
           } to keep a large paste inline.`,
-          data: { hideCopyButton: true },
+          data: { hideCopyButton: true, body: formatAttachmentSize(attached.sizeBytes) },
         });
       }
     }
@@ -345,7 +345,7 @@ export function useComposerAttachmentIntake(input: {
     }
     const confirmation = requestConfirmDialog(
       `Remove ${image?.name ?? "this image"} from the message?\nIt is referenced in your text; removing it also removes every reference.`,
-      { variant: "destructive" },
+      { variant: "destructive", confirmLabel: "Remove" },
     );
     if (!confirmation) {
       removeComposerImageFromDraft(imageId);

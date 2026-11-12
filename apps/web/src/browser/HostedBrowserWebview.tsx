@@ -4,14 +4,22 @@ import type {
   ScopedThreadRef,
 } from "@t3tools/contracts";
 import { useShallow } from "zustand/react/shallow";
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
 
 import { previewBridge } from "~/components/preview/previewBridge";
+import {
+  preventThumbButtonFocus,
+  takeThumbButtonNavigation,
+} from "~/components/preview/thumbButtons";
 import { usePreviewBridge } from "~/components/preview/usePreviewBridge";
 import { useClientSettingsHydrated } from "~/hooks/useSettings";
 import { cn, isMacPlatform } from "~/lib/utils";
 
-import { resolveBrowserSurfacePanelRect, useBrowserSurfaceStore } from "./browserSurfaceStore";
+import {
+  resolveBrowserSurfacePanelRect,
+  syncBrowserSurfaceWrapper,
+  useBrowserSurfaceStore,
+} from "./browserSurfaceStore";
 import { useActiveBrowserRecordingTabIds } from "./browserRecording";
 import {
   browserViewportSettingKey,
@@ -182,7 +190,10 @@ export function HostedBrowserWebview(props: {
     };
     // Guest clicks only emit focus here; replay pointerdown to dismiss host popups.
     const dismissHostPopups = () => {
-      webview.dispatchEvent(
+      const slot = document.querySelector(
+        `[data-browser-surface-slot="${CSS.escape(runtimeTabId)}"]`,
+      );
+      (slot?.closest("[data-layout-tab-id]") ? slot : webview).dispatchEvent(
         new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse" }),
       );
     };
@@ -279,6 +290,15 @@ export function HostedBrowserWebview(props: {
     return () => window.cancelAnimationFrame(frameId);
   }, [syncContentPresentation]);
 
+  // The slot moves the wrapper on screen directly (BrowserSurfaceSlot); a
+  // render that shows or hides it takes or drops that placement.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Publish the committed wrapper placement to the external browser surface registry.
+  useLayoutEffect(() => {
+    syncBrowserSurfaceWrapper(runtimeTabId, wrapperRef.current, active);
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Remove this wrapper from the browser surface registry when its runtime tab unmounts.
+  useEffect(() => () => syncBrowserSurfaceWrapper(runtimeTabId, null, false), [runtimeTabId]);
+
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- scrolls the webview wrapper element to its origin for a new tab or viewport size
   useEffect(() => {
     const wrapper = wrapperRef.current;
@@ -302,6 +322,12 @@ export function HostedBrowserWebview(props: {
 
   if (!clientSettingsHydrated || !config) return null;
 
+  // This fixed wrapper sits outside the right panel shell, so it takes thumb presses itself.
+  const navigateThumb = (direction: "back" | "forward") => {
+    if (direction === "back") void previewBridge?.goBack(runtimeTabId);
+    else void previewBridge?.goForward(runtimeTabId);
+  };
+
   const renderingActive = active || backgroundActivity || pictureInPicture || recordingActive;
   const wrapperStyle = resolveHostedBrowserWebviewWrapperStyle({
     active,
@@ -320,6 +346,8 @@ export function HostedBrowserWebview(props: {
       className="fixed overflow-hidden bg-muted/35"
       style={{ ...wrapperStyle, overscrollBehavior: "contain" }}
       onScroll={syncContentPresentation}
+      onMouseDown={preventThumbButtonFocus}
+      onMouseUp={(event) => takeThumbButtonNavigation(event, navigateThumb)}
       data-preview-rendering={renderingActive ? "active" : "suspended"}
       data-preview-viewport={runtimeTabId}
     >
@@ -384,7 +412,7 @@ export function HostedBrowserWebview(props: {
             />
             {activeDrag ? (
               <div
-                className="pointer-events-none absolute z-40 -translate-x-1/2 rounded-md border border-border/80 bg-background/95 px-2 py-1 text-2xs font-medium tabular-nums text-foreground shadow-md backdrop-blur-sm"
+                className="pointer-events-none absolute z-40 -translate-x-1/2 rounded-md border border-border/80 bg-background px-2 py-1 text-2xs font-medium tabular-nums text-foreground shadow-md"
                 style={{
                   left: layout.viewportX + layout.viewportWidth / 2,
                   top: layout.viewportY + 10,

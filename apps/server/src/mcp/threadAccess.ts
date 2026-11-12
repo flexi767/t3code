@@ -49,7 +49,8 @@ export const dispatchFailure = (
 ) =>
   error._tag === "ThreadManagementProviderInstanceDisabledError" ||
   error._tag === "OrchestratorRuntimeModeAboveCeilingError" ||
-  error._tag === "OrchestratorTurnAdmissionHeldError"
+  error._tag === "OrchestratorTurnAdmissionHeldError" ||
+  error._tag === "OrchestratorProviderSelectionBusyError"
     ? new OrchestratorMcpFailure({ code: "invalid_request", message: error.message })
     : (error._tag === "OrchestratorDispatchError" ||
           error._tag === "OrchestratorCommandRejectedError") &&

@@ -1,4 +1,7 @@
+import { useId } from "react";
+import { tooltipSafeFinalFocus } from "./focus-return";
 import { AlertDialog as AlertDialogPrimitive } from "@base-ui/react/alert-dialog";
+import { useRender } from "@base-ui/react/use-render";
 
 import { cn } from "~/lib/utils";
 import {
@@ -6,7 +9,12 @@ import {
   DIALOG_MOBILE_SHEET_CLASS,
   DIALOG_POPUP_CLASS,
 } from "~/components/ui/dialog-styles";
-import { ControlledOpenContext, renderRetainedPopup } from "~/components/ui/dialog";
+import {
+  ControlledOpenContext,
+  DialogAction,
+  renderRetainedPopup,
+  useDialogActionInitialFocus,
+} from "~/components/ui/dialog";
 
 function AlertDialog<Payload>(props: AlertDialogPrimitive.Root.Props<Payload>) {
   return (
@@ -51,23 +59,35 @@ function AlertDialogPopup({
   bottomStickOnMobile?: boolean;
   portalContainer?: AlertDialogPrimitive.Portal.Props["container"];
 }) {
+  const defaultId = useId();
+  const popupId = props.id ?? defaultId;
+  const { popupRef, initialFocus } = useDialogActionInitialFocus();
+  const popup = useRender({
+    ref: popupRef,
+    render: (
+      <AlertDialogPrimitive.Popup
+        className={cn(
+          DIALOG_POPUP_CLASS,
+          "row-start-2 max-h-full max-w-lg text-popover-foreground",
+          bottomStickOnMobile && DIALOG_MOBILE_SHEET_CLASS,
+          className,
+        )}
+        data-slot="alert-dialog-popup"
+        initialFocus={initialFocus}
+        render={renderRetainedPopup}
+        {...props}
+        id={popupId}
+        finalFocus={tooltipSafeFinalFocus(props.finalFocus, popupId)}
+      />
+    ),
+  });
   return (
     <AlertDialogPortal container={portalContainer}>
       <AlertDialogBackdrop />
       <AlertDialogViewport
         className={cn(bottomStickOnMobile && "max-sm:grid-rows-[1fr_auto] max-sm:p-0 max-sm:pt-12")}
       >
-        <AlertDialogPrimitive.Popup
-          className={cn(
-            DIALOG_POPUP_CLASS,
-            "row-start-2 max-h-full max-w-lg text-popover-foreground",
-            bottomStickOnMobile && DIALOG_MOBILE_SHEET_CLASS,
-            className,
-          )}
-          data-slot="alert-dialog-popup"
-          render={renderRetainedPopup}
-          {...props}
-        />
+        {popup}
       </AlertDialogViewport>
     </AlertDialogPortal>
   );
@@ -77,7 +97,7 @@ function AlertDialogHeader({ className, ...props }: React.ComponentProps<"div">)
   return (
     <div
       className={cn(
-        "flex min-h-0 flex-col gap-2 p-6 text-center max-sm:pb-4 sm:text-left",
+        "flex min-h-0 flex-col gap-1.5 px-5 pt-5 pb-4 text-center sm:text-left",
         className,
       )}
       data-slot="alert-dialog-header"
@@ -96,12 +116,11 @@ function AlertDialogFooter({
   return (
     <div
       className={cn(
-        "flex flex-col-reverse gap-2 px-6 sm:flex-row sm:justify-end sm:rounded-b-[calc(var(--radius-2xl)-1px)]",
-        variant === "default" && "border-t bg-muted/72 py-4",
-        variant === "bare" && "pb-6",
+        "flex flex-col-reverse gap-2 px-5 pb-4 sm:flex-row sm:justify-end sm:rounded-b-[calc(var(--radius-pane)-1px)]",
         className,
       )}
       data-slot="alert-dialog-footer"
+      data-variant={variant}
       {...props}
     />
   );
@@ -110,7 +129,10 @@ function AlertDialogFooter({
 function AlertDialogTitle({ className, ...props }: AlertDialogPrimitive.Title.Props) {
   return (
     <AlertDialogPrimitive.Title
-      className={cn("wrap-anywhere shrink-0 font-semibold text-xl leading-snug", className)}
+      className={cn(
+        "wrap-anywhere shrink-0 text-label [font-size:0.9375rem] font-semibold text-strong-foreground leading-snug",
+        className,
+      )}
       data-slot="alert-dialog-title"
       {...props}
     />
@@ -121,7 +143,7 @@ function AlertDialogDescription({ className, ...props }: AlertDialogPrimitive.De
   return (
     <AlertDialogPrimitive.Description
       className={cn(
-        "wrap-anywhere max-h-[min(24rem,60dvh)] min-h-0 overflow-y-auto overscroll-contain text-muted-foreground text-sm select-text",
+        "wrap-anywhere max-h-[min(24rem,60dvh)] min-h-0 overflow-y-auto overscroll-contain text-muted-foreground text-body sm:[font-size:0.8125rem] leading-[1.45] select-text",
         className,
       )}
       data-slot="alert-dialog-description"
@@ -146,5 +168,6 @@ export {
   AlertDialogTitle,
   AlertDialogDescription,
   AlertDialogClose,
+  DialogAction as AlertDialogAction,
   AlertDialogViewport,
 };

@@ -19,6 +19,15 @@ export function isTerminalFocused(): boolean {
   return getTerminalFocusOwner() !== null;
 }
 
+export function subscribeToTerminalFocusChanges(listener: () => void): () => void {
+  window.addEventListener("focusin", listener, true);
+  window.addEventListener("focusout", listener, true);
+  return () => {
+    window.removeEventListener("focusin", listener, true);
+    window.removeEventListener("focusout", listener, true);
+  };
+}
+
 interface TerminalFocusTarget {
   readonly threadRef: ScopedThreadRef;
   readonly terminalId: string;
@@ -115,15 +124,18 @@ export function focusTerminalOnNavigation(threadRef: ScopedThreadRef, terminalId
 
 /**
  * Entering a thread with its drawer open focuses the drawer terminal, unless a
- * navigating handler already asked for a terminal there. Returns the leave
- * cleanup for ChatView's effect.
+ * navigating handler already asked for a terminal there or workspace focus is
+ * already inside the pane. Returns the leave cleanup for ChatView's effect.
  */
-export function focusTerminalOnThreadEnter(threadRef: ScopedThreadRef): () => void {
+export function focusTerminalOnThreadEnter(
+  threadRef: ScopedThreadRef,
+  preserveFocus = false,
+): () => void {
   const threadKey = scopedThreadKey(threadRef);
   const requestedByHandler = navigationRequestThreadKey === threadKey;
   navigationRequestThreadKey = null;
   enteredThreadKey = threadKey;
-  if (!requestedByHandler) {
+  if (!requestedByHandler && !preserveFocus) {
     const { terminalOpen, activeTerminalId } = selectThreadTerminalUiState(
       useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
       threadRef,

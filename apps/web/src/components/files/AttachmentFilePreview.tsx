@@ -10,14 +10,22 @@ import {
   officePreviewKind,
   FILE_TEXT_PREVIEW_MAX_BYTES,
 } from "@t3tools/shared/filePreview";
-import { ChevronRightIcon, DownloadIcon, Trash2Icon, WrapTextIcon, XIcon } from "lucide-react";
-import { Check, Code2, Copy, Eye, Table2 } from "lucide";
+import {
+  ChevronRightIcon,
+  DownloadIcon,
+  FileQuestion,
+  Trash2Icon,
+  WrapTextIcon,
+  XIcon,
+  CheckIcon,
+  CopyIcon,
+} from "lucide-react";
+
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 import { useAssetUrlRefresh } from "~/assets/assetUrls";
 import ChatMarkdown from "~/components/ChatMarkdown";
 import { maskMarkdownFrontmatter } from "@t3tools/shared/markdownFrontmatter";
-import { MorphIcon } from "~/components/MorphIcon";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { toastManager } from "~/components/ui/toast";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
@@ -31,10 +39,12 @@ import { BrowserDocumentFrame } from "./BrowserDocumentFrame";
 import { DelimitedTablePreview } from "./DelimitedTablePreview";
 import {
   FILE_SURFACE_SUBHEADER_CLASS,
+  FileRenderedViewToggle,
   FileSurfaceAction,
   FileSurfaceFailure,
   FileSurfaceLoading,
   FileSurfaceNotice,
+  FileSurfaceState,
 } from "./fileSurfaceChrome";
 
 const LargeTextViewer = lazy(() => import("./LargeTextViewer"));
@@ -70,16 +80,6 @@ export function ReadOnlySourcePreview(props: { name: string; text: string; wordW
       <SourcePreview {...props} />
     </Suspense>
   );
-}
-
-function renderedToggleLabel(
-  mode: "markdown" | "mermaid" | "html" | "table",
-  rendered: boolean,
-): string {
-  if (mode === "mermaid") return rendered ? "Show Mermaid source" : "Show rendered diagram";
-  if (mode === "markdown") return rendered ? "Show markdown source" : "Show rendered markdown";
-  if (mode === "table") return rendered ? "Show source" : "Show table";
-  return rendered ? "Show HTML source" : "Show rendered page";
 }
 
 export function AttachmentFilePreview(props: {
@@ -368,13 +368,11 @@ export function AttachmentFilePreview(props: {
       onError={() => setError("Unable to load image.")}
     />
   ) : (
-    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 px-6 text-center">
-      <p className="text-sm font-medium">No preview for this file</p>
-      <p className="max-w-sm text-xs leading-relaxed text-muted-foreground">
-        Save it to open in an app that supports {props.name.split(".").at(-1) || "this format"}{" "}
-        files.
-      </p>
-    </div>
+    <FileSurfaceState
+      icon={<FileQuestion />}
+      title="No preview for this file"
+      description={`Save it to open in an app that supports ${props.name.split(".").at(-1) || "this format"} files.`}
+    />
   );
 
   return (
@@ -384,8 +382,11 @@ export function AttachmentFilePreview(props: {
           <span className="shrink-0 px-0.5 text-muted-foreground">
             {props.origin ?? "Attachment"}
           </span>
-          <ChevronRightIcon className="mx-1 size-3.5 shrink-0 text-muted-foreground/60" />
-          <span aria-current="page" className="min-w-0 truncate px-0.5 font-medium text-foreground">
+          <ChevronRightIcon className="mx-1 size-3.5 shrink-0 text-dim-foreground" />
+          <span
+            aria-current="page"
+            className="min-w-0 truncate px-0.5 font-medium text-strong-foreground"
+          >
             {props.name}
           </span>
           {props.sizeBytes > 0 ? (
@@ -395,16 +396,11 @@ export function AttachmentFilePreview(props: {
           ) : null}
         </div>
         {renderedMode ? (
-          <FileSurfaceAction
-            label={renderedToggleLabel(renderedMode, rendered)}
-            pressed={rendered}
-            onPress={() => setRendered((value) => !value)}
-          >
-            <MorphIcon
-              className="size-3.5"
-              icon={rendered ? Code2 : renderedMode === "table" ? Table2 : Eye}
-            />
-          </FileSurfaceAction>
+          <FileRenderedViewToggle
+            mode={renderedMode}
+            rendered={rendered}
+            onRenderedChange={setRendered}
+          />
         ) : null}
         {showsRawText ? (
           <FileSurfaceAction
@@ -443,7 +439,7 @@ export function AttachmentFilePreview(props: {
                 );
             }}
           >
-            <MorphIcon className="size-3.5" icon={isCopied ? Check : Copy} />
+            {isCopied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
           </FileSurfaceAction>
         ) : null}
         {url ? (

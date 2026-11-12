@@ -85,6 +85,9 @@ async function setup() {
   state.markHintSeen.mockReset();
   state.listeners.clear();
   window.localStorage.clear();
+  for (const region of document.querySelectorAll('body > [aria-live="polite"]')) {
+    region.textContent = "";
+  }
 
   await using stack = new AsyncDisposableStack();
   const _platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux");
@@ -168,22 +171,23 @@ async function setup() {
 }
 
 describe("host editor access", () => {
-  it("uses the selected grant for both the button and a retained shortcut", async () => {
+  it.each([false, true])("uses the selected grant (panel: %s)", async (panel) => {
     await using fixture = await setup();
     const { renderPicker, byLabel, primaryButton, click, pressOpenFavorite } = fixture;
     state.allowed.add(selected);
-    await renderPicker();
+    await renderPicker(editors, panel);
+    const openButton = () => (panel ? byLabel("Open in VS Code") : primaryButton());
     // Revoke without rerendering to exercise execution-time grant checks.
     state.allowed.delete(selected);
     state.allowed.add(primary);
-    await click(primaryButton());
+    await click(openButton());
     // The shortcut is consumed and opens nothing once the grant is gone.
     expect((await pressOpenFavorite()).defaultPrevented).toBe(true);
     expect(state.run).not.toHaveBeenCalled();
     expect(state.setPreferred).not.toHaveBeenCalled();
 
-    await renderPicker();
-    expect(primaryButton().disabled).toBe(true);
+    await renderPicker(editors, panel);
+    expect(openButton().disabled).toBe(true);
     expect(byLabel("Choose editor").disabled).toBe(true);
     expect((await pressOpenFavorite()).defaultPrevented).toBe(false);
   });
@@ -202,14 +206,33 @@ describe("remote editor links", () => {
     expect(state.openUrl).toHaveBeenCalledWith(expect.stringContaining("ssh-remote+sol"));
     expect(state.run).not.toHaveBeenCalled();
   });
+
+  it("explains why a phone or tablet browser has no editor to open", async () => {
+    await using fixture = await setup();
+    const { renderPicker, byLabel, primaryButton, menuItems, click, pressOpenFavorite } = fixture;
+    state.remote = { mode: "remote-links", host: { kind: "ssh-alias", host: "sol" } };
+    state.clientEditors = [];
+    await renderPicker();
+
+    expect(primaryButton().disabled).toBe(true);
+    expect((await pressOpenFavorite()).defaultPrevented).toBe(false);
+    await click(byLabel("Choose editor"));
+    await vi.waitFor(() =>
+      expect(menuItems().map((item) => item.textContent)).toEqual([
+        "Open from a computer to edit on Test host",
+      ]),
+    );
+    expect(menuItems()[0]!.getAttribute("aria-disabled")).toBe("true");
+    expect(state.openUrl).not.toHaveBeenCalled();
+  });
 });
 
 describe("open in editor announcement", () => {
-  it("speaks only after the shortcut opened the editor, from the picker or the fallback", async () => {
+  it.each([false, true])("announces successful opens (panel: %s)", async (panel) => {
     await using fixture = await setup();
     const { screen, renderPicker, pressOpenFavorite, FavoriteEditorFallback } = fixture;
     state.allowed.add(selected);
-    await renderPicker();
+    await renderPicker(editors, panel);
     using _timers = fakeTimers();
     const regions = () => [...document.querySelectorAll('body > [aria-live="polite"]')];
     const spoken = async () => {

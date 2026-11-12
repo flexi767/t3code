@@ -213,13 +213,12 @@ export function NewThreadLinkView({ link }: { readonly link: NewThreadLink }) {
       return;
     }
     setState({ status: "opening" });
-    const projectId = newProjectId();
     const remoteUrl = `https://github.com/${repository.owner}/${repository.name}.git`;
     const settings = serverConfig.settings;
     const result = await startProjectClone({
       environmentId,
       input: {
-        projectId,
+        projectId: newProjectId(),
         title: repository.name,
         createdAt: new Date().toISOString(),
         remoteUrl,
@@ -249,9 +248,10 @@ export function NewThreadLinkView({ link }: { readonly link: NewThreadLink }) {
       environmentId,
       `https://github.com/${repository.owner}/${repository.name}.git`,
     );
-    const project = await waitForProject(scopeProjectRef(environmentId, projectId), 5_000).catch(
-      () => null,
-    );
+    const project = await waitForProject(
+      scopeProjectRef(environmentId, result.value.projectId),
+      5_000,
+    ).catch(() => null);
     if (project === null) {
       setState({ status: "failed", message: "The clone started, but its project did not appear." });
       return;
@@ -352,7 +352,7 @@ export function NewThreadLinkView({ link }: { readonly link: NewThreadLink }) {
         <LinkPage title="This link is open">
           <Button
             size="sm"
-            variant="outline"
+            variant="secondary"
             onClick={() => {
               openedLinkKeys.delete(locationKey);
               setStarted(false);
@@ -377,7 +377,7 @@ export function NewThreadLinkView({ link }: { readonly link: NewThreadLink }) {
           <Button size="sm" onClick={() => void cloneRepository(state.repository)}>
             Clone {name}
           </Button>
-          <Button size="sm" variant="outline" onClick={openWithoutProject}>
+          <Button size="sm" variant="secondary" onClick={openWithoutProject}>
             Use without project
           </Button>
         </LinkPage>

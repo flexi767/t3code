@@ -127,6 +127,7 @@ describe("GhosttyTerminalSurface visibility", () => {
       canvas,
       beginPath() {},
       clip() {},
+      getTransform: () => ({ a: 1, d: 1 }),
       rect() {},
       resetTransform() {},
       restore() {},
@@ -283,6 +284,24 @@ describe("GhosttyTerminalSurface visibility", () => {
       "\x1b[F",
     ]);
     expect(surface.hasSelection()).toBe(false);
+  });
+
+  it("skips middle-click selection paste when the desktop turned primary paste off", async () => {
+    vi.stubGlobal("navigator", { platform: "Linux x86_64" });
+    const harness = createHarness();
+    const surface = await harness.create();
+    surface.write("echo hi");
+    surface.selectAll();
+    const pasteFromClipboard = vi.spyOn(surface, "pasteFromClipboard");
+
+    let primaryPasteEnabled = false;
+    Object.assign(window, { desktopBridge: { getPrimaryPasteEnabled: () => primaryPasteEnabled } });
+    harness.pointer("pointerdown", 5, 4, {}, 1);
+    expect(pasteFromClipboard).not.toHaveBeenCalled();
+
+    primaryPasteEnabled = true;
+    harness.pointer("pointerdown", 5, 4, {}, 1);
+    expect(pasteFromClipboard).toHaveBeenCalledOnce();
   });
 
   it("leaves modified history keys with alternate-screen applications", async () => {
@@ -520,6 +539,22 @@ describe("GhosttyTerminalSurface visibility", () => {
     surface.write("\r\nrow 10\r\nrow 11");
     harness.pointer("pointermove", 53, 1, {}, 0, 50);
     expect(surface.getSelection()).toBe("row 6\nrow 7\nrow 8");
+  });
+
+  it("leaves mostly sideways wheel events to the scroller around it", async () => {
+    const harness = createHarness();
+    await harness.create();
+    const wheel = (deltaX: number, deltaY: number) => {
+      const event = Object.assign(new Event("wheel", { cancelable: true }), {
+        deltaX,
+        deltaY,
+        deltaMode: 0,
+      });
+      harness.canvas.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    expect(wheel(-20, 1)).toBe(false);
+    expect(wheel(2, -60)).toBe(true);
   });
 
   it("does not activate a link replaced before pointer release", async () => {

@@ -97,22 +97,20 @@ export default function OfficeViewer(props: {
         role="alert"
         className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 px-6 text-center"
       >
-        <p className="text-sm font-medium">No preview for this file</p>
-        <p className="max-w-sm text-xs leading-relaxed text-muted-foreground">
+        <p className="text-label">No preview for this file</p>
+        <p className="max-w-sm text-meta leading-relaxed text-muted-foreground">
           {error} Save it or open it in another app.
         </p>
       </div>
     );
   if (!prepared) return <FileSurfaceLoading />;
-  const Viewer =
-    props.kind === "docx" ? WordDocument : props.kind === "xlsx" ? Spreadsheet : Presentation;
+  const Viewer = props.kind === "docx" ? WordDocument : Presentation;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {details ? (
         <div className={FILE_SURFACE_SUBHEADER_CLASS}>
-          <span className="text-xs text-muted-foreground" aria-live="polite">
+          <span className="text-meta text-muted-foreground" aria-live="polite">
             {details}
-            {props.kind !== "xlsx" ? " · Fit to width" : ""}
           </span>
         </div>
       ) : null}
@@ -122,7 +120,16 @@ export default function OfficeViewer(props: {
         </FileSurfaceNotice>
       ) : null}
       <Suspense fallback={<FileSurfaceLoading />}>
-        <Viewer bytes={prepared.bytes} onDetails={setDetails} onError={fail} />
+        {prepared.view ? (
+          <Spreadsheet
+            bytes={prepared.bytes}
+            view={prepared.view}
+            onDetails={setDetails}
+            onError={fail}
+          />
+        ) : (
+          <Viewer bytes={prepared.bytes} onDetails={setDetails} onError={fail} />
+        )}
       </Suspense>
     </div>
   );

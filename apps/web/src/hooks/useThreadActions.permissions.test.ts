@@ -146,6 +146,9 @@ vi.mock("../composerDraftStore", () => ({
       clearProjectDraftThreadById: () => state.localEffects.push("clear-project-draft"),
     }),
 }));
+vi.mock("../components/ThreadSurfaceTab", () => ({
+  discardThreadSurfaces: () => state.localEffects.push("discard-surfaces"),
+}));
 vi.mock("../terminalUiStateStore", () => ({
   useTerminalUiStateStore: (select: (store: unknown) => unknown) =>
     select({
@@ -341,8 +344,8 @@ describe("thread action permissions", () => {
     state.confirm.mockResolvedValue(false);
     await useThreadActions().confirmAndDeleteThread(target, "Archived release notes");
     expect(state.confirm).toHaveBeenCalledWith(
-      expect.stringContaining('Delete thread "Archived release notes"?'),
-      { variant: "destructive" },
+      'This deletes "Archived release notes" and its chat history.',
+      expect.objectContaining({ variant: "destructive", title: "Delete thread?" }),
     );
     expect(state.requests).toEqual([]);
   });

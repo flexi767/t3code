@@ -1,15 +1,16 @@
 # Appearance and themes
 
 On web and desktop, open **Settings → Appearance** to choose a theme and follow the system
-appearance or stay in light or dark mode. To use different themes for light and dark mode, select
+appearance or stay in light or dark mode. **Black chrome** is light mode with a black window and
+sidebar around the light panes. To use different themes for light and dark mode, select
 the corresponding preview within each theme. Appearance preferences are saved separately on each
 device or browser.
 
 On web and desktop, use **Change theme** in the command palette to select a theme without leaving chat.
 Press **Cmd+Option+A** on macOS or **Ctrl+Alt+A** on Windows/Linux to open the theme picker directly.
-Use **Change appearance** in the command palette to choose System, Light, or Dark independently of
-the theme. **Cmd+Option+Shift+A** on macOS or **Ctrl+Alt+Shift+A** on Windows/Linux cycles through
-those modes. Customize these shortcuts under **Settings → Keybindings**.
+Use **Change appearance** in the command palette to choose System, Light, Black chrome, or Dark
+independently of the theme. **Cmd+Option+Shift+A** on macOS or **Ctrl+Alt+Shift+A** on
+Windows/Linux cycles through those modes. Customize these shortcuts under **Settings → Keybindings**.
 
 On mobile, open **Settings → Appearance**. Mobile has its own themes and text,
 code, and terminal preferences. It does not follow environment themes or defaults.
@@ -21,13 +22,12 @@ Android uses **Material You Layout** by default unless you have turned it off in
 It changes shapes, spacing, and controls independently
 of the selected theme.
 
-## Composer context
+## Style
 
-Git-backed projects show branch and worktree controls below the composer while you create a thread.
-The controls retreat as the composer docks after you send the first message.
-
-Turn on **Composer context** to keep those controls visible after the thread starts. This preference
-applies to the web and desktop clients.
+On web and desktop, **Style** in **Settings → Appearance** sets how buttons and controls are
+painted, independently of the theme: **Standard** (the default), **Flat**, **Soft**, **Gloss**,
+**Accent gloss**, or **Outline**. Accent gloss paints main buttons, the send button, and switches
+in the theme's accent color.
 
 ## Math
 
@@ -43,10 +43,13 @@ preference is saved separately on each device.
 
 ## Motion
 
-The main sidebar, right panel, and terminal drawer open and close immediately by default. Move the
-**Panel animations** slider above 0 ms to add motion, up to 400 ms, unless reduced motion is enabled
-in your operating system. Moving between threads always snaps to the selected thread's panel state
-without replaying its transitions.
+The main sidebar, right panel, and terminal drawer open and close with a short 150 ms animation by
+default. The **Panel animations** slider sets it from 0 ms (off) to 400 ms. Moving between threads
+always snaps to the selected thread's panel state without replaying its transitions.
+
+Moving around the layout (switching workspaces, focusing a column off screen, opening and closing
+panes, the overview) always animates, whatever the slider says. Reduced motion in your operating
+system makes all of it, and the panels, instant.
 
 ## Custom themes
 

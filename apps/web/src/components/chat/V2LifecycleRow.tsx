@@ -13,7 +13,7 @@ import { environmentThreadDetails } from "../../state/threads";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { MiddleTruncate } from "../ui/middle-truncate";
 import * as DateTime from "effect/DateTime";
-import { WorkLogRow } from "./WorkLog";
+import { WorkLogRow, WorkLogTarget, WorkLogVerb } from "./WorkLog";
 import {
   resolveHandoffEndpoints,
   type HandoffEndpoints,
@@ -39,8 +39,9 @@ import {
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import {
   BotIcon,
-  ChevronRightIcon,
+  CheckIcon,
   CircleStopIcon,
+  XIcon,
   ArrowRightLeftIcon,
   ArrowRightIcon,
   EraserIcon,
@@ -60,6 +61,9 @@ import { formatShortTimestamp } from "../../timestampFormat";
 import { getTriggerDisplayModelName } from "./providerIconUtils";
 import { ProviderInstanceIcon, providerTextColor } from "./ProviderInstanceIcon";
 import { cn } from "~/lib/utils";
+import { formatModelSlugName } from "@t3tools/shared/model";
+import { formatSubagentEffort } from "@t3tools/client-runtime/state/thread-execution";
+import { Spinner } from "../ui/spinner";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
 import { subagentResumedSince } from "./V2LifecycleRow.logic";
 import { Button, InlineButton } from "../ui/button";
@@ -73,6 +77,7 @@ export function V2LifecycleRow(props: {
   readonly resourceSummary?: boolean | undefined;
   readonly runs: ReadonlyArray<HandoffTimelineRun>;
   readonly onOpenThread: (threadId: ThreadId) => void;
+  /** Subagent members listed inside a group header render as flat one-line rows. */
 }) {
   const { item } = props;
   if (item.type === "run_interrupt_result") {
@@ -110,17 +115,17 @@ export function V2LifecycleRow(props: {
       return (
         <div
           data-v2-item-type={item.type}
-          className="flex min-w-0 items-center gap-3 rounded-lg border border-border/60 p-3"
+          className="flex min-w-0 items-center gap-3 rounded-card border border-transparent surface-card p-3"
         >
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted/60">
-            <MessageSquareIcon className="size-4 text-secondary-label" aria-hidden />
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-control bg-muted">
+            <MessageSquareIcon className="size-4 text-muted-foreground" aria-hidden />
           </span>
           <span className="min-w-0 flex-1 truncate text-sm font-medium">
             {item.title ?? "Created thread"}
           </span>
           <Button
             size="xs"
-            variant="outline"
+            variant="secondary"
             aria-label={`Open ${item.title ?? "created thread"}`}
             onClick={() => props.onOpenThread(item.targetThreadId)}
           >
@@ -133,7 +138,12 @@ export function V2LifecycleRow(props: {
       <WorkLogRow
         data-v2-item-type={item.type}
         icon={<T3Wordmark className="size-4 text-icon-muted" aria-hidden />}
-        label={<>Created thread{item.title ? ` · ${item.title}` : ""}</>}
+        label={
+          <span className="flex min-w-0 items-baseline gap-1.5">
+            <WorkLogVerb>Created thread</WorkLogVerb>
+            {item.title ? <WorkLogTarget>{item.title}</WorkLogTarget> : null}
+          </span>
+        }
         trailing={
           <InlineButton
             aria-label={`Open ${item.title ?? "created thread"}`}
@@ -175,11 +185,11 @@ const STATUS_VISUALS: Record<
   pending: { dotClass: "bg-info", label: "Queued" },
   running: { dotClass: "bg-info", label: "Running" },
   waiting: { dotClass: "bg-info", label: "Waiting" },
-  idle: { dotClass: "bg-muted-foreground/50", label: "Idle · resumable" },
+  idle: { dotClass: "bg-dim-foreground", label: "Idle" },
   completed: { dotClass: "bg-success", label: "Completed" },
   failed: { dotClass: "bg-destructive", label: "Failed" },
-  cancelled: { dotClass: "bg-muted-foreground/60", label: "Stopped" },
-  interrupted: { dotClass: "bg-muted-foreground/60", label: "Stopped" },
+  cancelled: { dotClass: "bg-dim-foreground", label: "Stopped" },
+  interrupted: { dotClass: "bg-dim-foreground", label: "Stopped" },
 };
 
 function subagentStatusVisual(status: OrchestrationV2TurnItem["status"]) {
@@ -208,7 +218,7 @@ function isoOrNull(value: DateTime.Utc | null | undefined): string | null {
   return value ? DateTime.formatIso(value) : null;
 }
 
-export function SubagentElapsed({ agent }: { agent: Parameters<typeof AgentElapsed>[0]["agent"] }) {
+function SubagentElapsed({ agent }: { agent: Parameters<typeof AgentElapsed>[0]["agent"] }) {
   return <AgentElapsed agent={agent} />;
 }
 
@@ -220,6 +230,7 @@ function SubagentAvatar({
   showBadge,
   status,
   className,
+  plain,
 }: {
   driver?: ProviderDriverKind | undefined;
   displayName?: string | undefined;
@@ -228,7 +239,32 @@ function SubagentAvatar({
   showBadge: boolean;
   status?: OrchestrationV2TurnItem["status"] | undefined;
   className?: string;
+  /** The bare provider logo, for rows that show the status elsewhere. */
+  plain?: boolean | undefined;
 }) {
+  if (plain) {
+    return (
+      <span
+        aria-hidden
+        className={cn("inline-flex size-4 shrink-0 items-center justify-center", className)}
+      >
+        {driver ? (
+          <ProviderInstanceIcon
+            driverKind={driver}
+            displayName={displayName ?? driver}
+            accentColor={accentColor}
+            acpRegistryIconUrl={iconUrl}
+            showBadge={showBadge}
+            size="compact"
+            className="z-auto"
+            iconClassName="size-4"
+          />
+        ) : (
+          <BotIcon className="size-4 text-dim-foreground" />
+        )}
+      </span>
+    );
+  }
   return (
     <span
       aria-hidden
@@ -274,10 +310,12 @@ export function EnvironmentSubagentAvatar({
 }: {
   environmentId: EnvironmentId;
   providerInstanceId: ProviderInstanceId;
+  className?: string;
   driver?: ProviderDriverKind | undefined;
   /** A task in a linked environment runs a provider instance there; its driver here is only a label. */
   remote?: OrchestrationV2RemoteTaskChild | undefined;
   status?: OrchestrationV2TurnItem["status"] | undefined;
+  plain?: boolean | undefined;
 }) {
   const providerEnvironmentId = remote?.environmentId ?? environmentId;
   const providersAtom = serverEnvironment.providersValueAtom(providerEnvironmentId);
@@ -394,6 +432,55 @@ export function SubagentNotificationLink(props: {
   );
 }
 
+/** The row's trailing state: working, done or failed at a glance. */
+function SubagentStatusGlyph({ status }: { status: OrchestrationV2TurnItem["status"] }) {
+  return (
+    <span className="flex size-3.5 shrink-0 items-center justify-center">
+      {status === "pending" || status === "running" || status === "waiting" ? (
+        <Spinner size="xs" tone="muted" aria-label={subagentStatusVisual(status).label} />
+      ) : status === "completed" ? (
+        <CheckIcon aria-hidden className="size-3 text-success-foreground" />
+      ) : status === "failed" ? (
+        <XIcon aria-hidden className="size-3 text-error-foreground" />
+      ) : (
+        <span aria-hidden className="size-1.5 rounded-full bg-dim-foreground" />
+      )}
+    </span>
+  );
+}
+
+/** The model as the picker names it, with its effort. Selects a string, so a row re-renders only when that changes. */
+function SubagentModelLabel(props: {
+  readonly environmentId: EnvironmentId;
+  readonly providerInstanceId: ProviderInstanceId;
+  readonly model: string;
+  readonly modelSelection: OrchestrationV2Subagent["modelSelection"];
+}) {
+  const label = useAtomValue(
+    serverEnvironment.providersValueAtom(props.environmentId),
+    (providers) => {
+      const provider = providers?.find(
+        (candidate) => candidate.instanceId === props.providerInstanceId,
+      );
+      const model = provider?.models.find((candidate) => candidate.slug === props.model);
+      const name = model
+        ? getTriggerDisplayModelName(model, provider?.driver)
+        : formatModelSlugName(props.model);
+      const effort = formatSubagentEffort({
+        modelSlug: props.model,
+        modelSelection: props.modelSelection,
+        provider,
+      });
+      return effort ? `${name} ${effort}` : name;
+    },
+  );
+  return (
+    <span className="shrink-0 whitespace-nowrap text-caption text-muted-foreground max-sm:hidden">
+      {label}
+    </span>
+  );
+}
+
 function SubagentTimelineLink(props: {
   readonly parentRef: ScopedThreadRef;
   readonly subagentId: NodeId;
@@ -450,6 +537,7 @@ function SubagentTimelineLink(props: {
     startedAt: isoOrNull(agent?.startedAt ?? props.startedAt),
     completedAt: isoOrNull(agent?.completedAt ?? props.completedAt),
   };
+  // One quiet line: logo, title, what it is doing, model, time, state.
   const content = (
     <>
       <EnvironmentSubagentAvatar
@@ -457,52 +545,66 @@ function SubagentTimelineLink(props: {
         providerInstanceId={props.providerInstanceId}
         driver={props.driver}
         remote={remote}
-        status={status ?? undefined}
+        plain
+        // The tool rows' 24px icon column; the pull-back leaves their 5px gap to the label.
+        className="-me-0.75 size-6"
       />
-      <span className="min-w-0 flex-1">
-        <span className="flex items-baseline gap-2">
-          <span className="min-w-0 truncate text-xs font-medium text-foreground">
-            {props.title}
-          </span>
-          {remote !== undefined ? (
-            <span className="shrink-0 text-xs text-muted-foreground">on {remote.label}</span>
-          ) : null}
-        </span>
+      <span
+        className={cn(
+          "min-w-0 shrink truncate text-label text-foreground",
+          !props.event && "max-sm:flex-1",
+        )}
+      >
+        {props.title}
+      </span>
+      {remote !== undefined ? (
+        <span className="shrink-0 text-caption text-dim-foreground">on {remote.label}</span>
+      ) : null}
+      <span
+        className={cn(
+          "min-w-0 flex-1 truncate text-body",
+          !props.event && "max-sm:hidden",
+          failed ? "text-error-foreground" : "text-dim-foreground",
+        )}
+      >
+        {detail === null ? null : detail.includes("/") && !detail.includes(" ") ? (
+          <MiddleTruncate value={detail} showTitle={false} className="flex" />
+        ) : (
+          detail
+        )}
+      </span>
+      {agent?.model ? (
+        <SubagentModelLabel
+          environmentId={remote?.environmentId ?? props.parentRef.environmentId}
+          providerInstanceId={props.providerInstanceId}
+          model={agent.model}
+          modelSelection={agent.modelSelection}
+        />
+      ) : null}
+      {props.event ? (
         <span
           className={cn(
-            "block text-2xs leading-relaxed",
-            failed ? "text-destructive" : "text-muted-foreground",
+            "shrink-0 text-caption",
+            failed ? "text-error-foreground" : "text-muted-foreground",
           )}
-        >
-          {detail === null ? (
-            statusLabel
-          ) : detail.includes("/") && !detail.includes(" ") ? (
-            <MiddleTruncate value={detail} showTitle={false} className="flex" />
-          ) : (
-            <span className="block truncate">{detail}</span>
-          )}
-        </span>
-      </span>
-      {detail !== null && (props.event !== undefined || status !== "completed") ? (
-        <span
-          className={cn("shrink-0 text-xs", failed ? "text-destructive" : "text-muted-foreground")}
         >
           {statusLabel}
         </span>
       ) : null}
-      <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+      <span
+        className={cn(
+          "shrink-0 font-mono text-3xs text-dim-foreground tabular-nums",
+          !props.event && "max-sm:hidden",
+        )}
+      >
         {props.event ? props.event.timestamp : <SubagentElapsed agent={timing} />}
       </span>
-      {open !== null ? (
-        <ChevronRightIcon
-          aria-hidden
-          className="size-3.5 shrink-0 text-muted-foreground/60 transition-colors group-hover/subagent:text-foreground"
-        />
-      ) : null}
+      {props.event ? null : <SubagentStatusGlyph status={liveStatus} />}
     </>
   );
+  // The tool rows' metrics: 24px tall, flush left, the same end inset.
   const className =
-    "group/subagent flex w-full min-w-0 items-center gap-2.5 rounded-md px-2 py-1.5 text-left";
+    "group/subagent flex min-h-6 w-full min-w-0 items-center gap-2 rounded-md pe-1.5 text-left";
   return (
     <Tooltip>
       <TooltipTrigger
@@ -521,7 +623,7 @@ function SubagentTimelineLink(props: {
               onClick={open}
               className={cn(
                 className,
-                "cursor-pointer transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
+                "cursor-pointer transition-colors hover:surface-ghost-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
               )}
             >
               {content}
@@ -604,7 +706,7 @@ export function FreshSessionRow() {
 }
 
 /** A same-harness model or effort change. Shows only what changed. */
-export function ModelSwitchRow(props: {
+export function ModelSwitchNote(props: {
   readonly environmentId: EnvironmentId;
   readonly modelSwitch: OrchestrationV2ModelSwitch;
 }) {
@@ -620,10 +722,73 @@ export function ModelSwitchRow(props: {
     return [change.modelChanged ? modelName : null, effort].filter(Boolean).join(" ");
   };
   const { from, to } = props.modelSwitch;
+  const label = `${describe(from, change.effort?.from)} → ${describe(to, change.effort?.to)}`;
+  return <SwitchNote label={label} />;
+}
+
+export function HandoffNote(props: {
+  readonly environmentId: EnvironmentId;
+  readonly item: Extract<OrchestrationV2TurnItem, { type: "handoff" }>;
+  readonly runs: ReadonlyArray<HandoffTimelineRun>;
+}) {
+  const providers =
+    useAtomValue(serverEnvironment.providersValueAtom(props.environmentId)) ??
+    EMPTY_SERVER_PROVIDERS;
+  const settings = useAtomValue(serverEnvironment.settingsValueAtom(props.environmentId));
+  const derived = deriveProviderInstanceEntries(providers);
+  const entries = settings ? applyProviderInstanceSettings(derived, settings, null) : derived;
+  const { from, to } = resolveHandoffEndpoints(props.item, props.runs);
+  const describe = (selection: HandoffEndpoints["from"][number]) => {
+    const provider = providers.find((candidate) => candidate.instanceId === selection.instanceId);
+    const model = provider?.models.find((candidate) => candidate.slug === selection.model);
+    const entry = entries.find((candidate) => candidate.instanceId === selection.instanceId);
+    return model
+      ? getTriggerDisplayModelName(model, provider?.driver)
+      : (selection.model ?? entry?.displayName ?? selection.instanceId);
+  };
+  const label = [...(from.length ? [from.map(describe).join(", ")] : []), describe(to)].join(" → ");
+  const providerName = (selection: HandoffEndpoints["from"][number]) =>
+    entries.find((candidate) => candidate.instanceId === selection.instanceId)?.displayName ??
+    selection.instanceId;
+  const detail = `${from.map(providerName).join(", ")} → ${providerName(to)}`;
   return (
-    <TimelineSystemDivider
-      label={`${describe(from, change.effort?.from)} → ${describe(to, change.effort?.to)}`}
+    <SwitchNote
+      label={label}
+      handoff
+      failed={props.item.status === "failed"}
+      detail={`Context handoff${props.item.status === "failed" ? " failed" : ""}: ${detail}`}
     />
+  );
+}
+
+function SwitchNote(props: {
+  readonly label: string;
+  readonly handoff?: boolean;
+  readonly detail?: string;
+  readonly failed?: boolean;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            data-model-switch-note
+            tabIndex={0}
+            className={cn(
+              "min-w-0 truncate text-muted-foreground",
+              props.handoff ? "text-label" : "text-meta",
+              props.failed && "text-error-foreground",
+            )}
+          />
+        }
+      >
+        {props.label}
+      </TooltipTrigger>
+      <TooltipPopup side="top">
+        {props.detail ? <span className="block">{props.detail}</span> : null}
+        {props.label}
+      </TooltipPopup>
+    </Tooltip>
   );
 }
 
@@ -642,7 +807,6 @@ export function HandoffRow(props: {
     <TimelineSystemDivider
       label={props.pending ? "Context handoff pending" : "Context handoff"}
       icon={ArrowRightLeftIcon}
-      showDetailSeparator={false}
       tone={props.failed ? "danger" : "neutral"}
       detail={
         <span className="inline-flex min-w-0 flex-wrap items-center justify-center gap-1.5">
@@ -714,7 +878,7 @@ function HandoffEndpoint(props: {
               indicatorBackground="var(--background)"
             />
             <span
-              className={cn("truncate font-medium", labelColor.className)}
+              className={cn("truncate text-label", labelColor.className)}
               style={labelColor.style}
             >
               {label}
@@ -723,7 +887,8 @@ function HandoffEndpoint(props: {
         }
       />
       <TooltipPopup>
-        {entry?.displayName ?? props.instanceId} · {label}
+        <span className="block">{entry?.displayName ?? props.instanceId}</span>
+        <span className="block">{label}</span>
       </TooltipPopup>
     </Tooltip>
   );

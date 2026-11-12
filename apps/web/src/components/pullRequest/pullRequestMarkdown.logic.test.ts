@@ -3,7 +3,11 @@ import remarkParse from "remark-parse";
 import { unified } from "unified";
 import { describe, expect, it } from "vite-plus/test";
 
-import { remarkPullRequestAutolinks } from "./pullRequestMarkdown.logic";
+import {
+  pullRequestAttachments,
+  pullRequestCommentPreview,
+  remarkPullRequestAutolinks,
+} from "./pullRequestMarkdown.logic";
 
 type Node = {
   type: string;
@@ -41,6 +45,64 @@ describe("remarkPullRequestAutolinks", () => {
       ["#12", "https://github.com/team/repo/issues/12", "reference"],
       ["abcdef1", "https://github.com/team/repo/commit/abcdef1", "commit"],
       ["#13", "https://example.com", undefined],
+    ]);
+  });
+});
+
+describe("pullRequestCommentPreview", () => {
+  it.each([
+    ["<!-- hidden -->\n> [!WARNING]\n**Guard** [this](https://example.com).", "Guard this."],
+    [
+      '<a href="https://example.com"><img src="badge.svg" /></a>\n<strong>Tasks keep the wrong computer</strong>',
+      "Tasks keep the wrong computer",
+    ],
+    [
+      "<details><summary>Review &amp; fixes</summary><p>First<br>Second</p></details>",
+      "Review & fixes First Second",
+    ],
+    ['<p title="value > limit">Keep <strong>this</strong> readable.</p>', "Keep this readable."],
+    [
+      "Use `<div>` and `Promise<void>`.\n\n```html\n<span>example</span>\n```",
+      "Use <div> and Promise<void>. <span>example</span>",
+    ],
+    ["![badge](https://example.com/badge.svg) **Review**", "badge Review"],
+    ["```md\n[!TIP]\n> [!WARNING]\n```\n\n    [!NOTE]", "[!TIP] > [!WARNING] [!NOTE]"],
+    [
+      "Review :codex-file-citation{purpose='output'} safely.",
+      "Review :codex-file-citation{purpose='output'} safely.",
+    ],
+    [":codex-followup[Prepare **print** version]", ":codex-followup[Prepare **print** version]"],
+  ])("extracts readable text from %s", (body, expected) => {
+    expect(pullRequestCommentPreview(body)).toBe(expected);
+  });
+});
+
+describe("pullRequestAttachments", () => {
+  it("collects body media and image references once while leaving code alone", () => {
+    expect(
+      pullRequestAttachments(
+        [
+          "![Before](https://example.com/before.png)",
+          "![Again](https://example.com/before.png)",
+          "![After][result]",
+          "",
+          "[result]: https://example.com/after.png",
+          "",
+          "https://example.com/demo.mp4",
+          "",
+          "```md",
+          "![Code](https://example.com/code.png)",
+          "```",
+          "    ![Indented](https://example.com/indented.png)",
+          "![Unsafe](javascript:alert)",
+          '<img src="https://example.com/screenshot.png" alt="Screenshot" />',
+        ].join("\n"),
+      ),
+    ).toEqual([
+      { url: "https://example.com/before.png", media: "image", caption: "Image 1" },
+      { url: "https://example.com/after.png", media: "image", caption: "Image 2" },
+      { url: "https://example.com/demo.mp4", media: "video", caption: "Video 3" },
+      { url: "https://example.com/screenshot.png", media: "image", caption: "Image 4" },
     ]);
   });
 });

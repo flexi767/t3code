@@ -37,6 +37,7 @@ import {
 import * as ClaudeAdapterV2 from "./ClaudeAdapterV2.ts";
 import { claudeTaskOutputRoot } from "./ClaudeTaskOutputTail.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import * as ProviderInstallationGate from "../../provider/ProviderInstallationGate.ts";
 import { ProviderAdapterDriverCreateError } from "@t3tools/provider-core/server/adapterDriver";
 import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
 import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
@@ -850,6 +851,13 @@ function makeReplayQueryRunner(
         readMcpResource: () => Effect.die("unexpected MCP resource read in replay"),
         callMcpTool: () => Effect.die("unexpected MCP tool call in replay"),
         listPermissionRules: Effect.die("unexpected permission rules read in replay"),
+        // Recorded CLIs answer no context-usage request, so replays keep plain usage.
+        getContextUsage: Effect.fail(
+          new ClaudeAdapterV2.ClaudeAgentSdkQueryRunnerError({
+            method: "getContextUsage",
+            cause: new Error("Unsupported control request subtype"),
+          }),
+        ),
         interrupt: replayEffect(() => {
           assertNextOutboundFrame({ type: "query.interrupt" });
         }),
@@ -1054,6 +1062,7 @@ function layerClaudeProviderAdapterRegistryReplay(
       Layer.mergeAll(
         layerClaudeAgentSdkReplay(transcript, options),
         IdAllocator.layer,
+        ProviderInstallationGate.layer,
         NodeServices.layer,
         NodeCrypto.layer,
         layerServerConfig,
@@ -2175,15 +2184,11 @@ async function recordClaudeForkSessionQuery(input: {
           type: "session.fork",
           sessionId: input.sessionId,
           options: {
-            dir: sanitizedReplayCwd(input.scenario),
             upToMessageId,
           },
         },
       });
-      const forked = await forkSession(input.sessionId, {
-        dir: input.cwd,
-        upToMessageId,
-      });
+      const forked = await forkSession(input.sessionId, { upToMessageId });
       forkedNativeSessionIds.push(forked.sessionId);
       input.entries.push({
         type: "emit_inbound",

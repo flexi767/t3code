@@ -2,28 +2,24 @@ import { FolderPlusIcon, SearchIcon, SquarePenIcon, XIcon } from "lucide-react";
 import {
   type ComponentProps,
   type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
   type ReactNode,
   type RefObject,
-  useState,
 } from "react";
 
-import { useEnvironmentIdentificationMode } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
-import { useSidebarStageBackdropVariant } from "../SidebarStageBackdrop";
 import { Button } from "../ui/button";
-import { SidebarInput, SidebarMenuButton } from "../ui/sidebar";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
+import { SidebarMenuButton } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export interface SidebarThreadHeaderProps {
+  /** Without projects there is nothing to scope, so the scope picker stays out. */
   hasProjects: boolean;
   projectScope: ReactNode;
   onNewProject: () => void;
-  onNewThread: (event: ReactMouseEvent) => void;
+  onNewThread: () => void;
   newThreadDisabled: boolean;
   newThreadShortcutLabel: string | null | undefined;
-  newThreadInProjectShortcutLabel: string | null | undefined;
-  showNewThreadInProjectHint: boolean;
   searchInputRef: RefObject<HTMLInputElement | null>;
   searchQuery: string;
   onSearchQueryChange: (value: string) => void;
@@ -41,8 +37,6 @@ export function SidebarThreadHeader({
   onNewThread,
   newThreadDisabled,
   newThreadShortcutLabel,
-  newThreadInProjectShortcutLabel,
-  showNewThreadInProjectHint,
   searchInputRef,
   searchQuery,
   onSearchQueryChange,
@@ -52,8 +46,6 @@ export function SidebarThreadHeader({
   activeSearchResultIndex,
   onClearSearch,
 }: SidebarThreadHeaderProps) {
-  const [searchExpanded, setSearchExpanded] = useState(false);
-  const onBackdrop = useSidebarStageBackdropVariant(useEnvironmentIdentificationMode()) !== null;
   const resultsVisible = isSearching && searchResultCount > 0;
   // Shrinking results can remove the active option; never leave aria-activedescendant pointing at it.
   const activeResultExists = resultsVisible && activeSearchResultIndex < searchResultCount;
@@ -62,37 +54,23 @@ export function SidebarThreadHeader({
     : "New thread";
 
   return (
-    <div
-      className={cn(
-        // Sits in the title bar above this group, centered on the 52px workspace bar.
-        "@container pointer-events-auto absolute top-[calc(var(--workspace-controls-top)-42px)] md:top-[calc(var(--workspace-controls-top)-30px)] left-[var(--workspace-titlebar-content-left)] right-3 flex items-center gap-1 md:left-[var(--workspace-controls-left)]",
-        !searchExpanded && "md:right-[calc(var(--workspace-titlebar-control-size)+7px)]",
-        onBackdrop &&
-          "[&_input]:text-white! [&_input]:placeholder:text-white/70! [&_svg]:text-white/70! [&>div:first-child:focus-within]:bg-white/15! [&>div:first-child:hover]:bg-white/15!",
-      )}
-      data-sidebar-search-expanded={searchExpanded ? "" : undefined}
-    >
-      <div
-        className="flex h-8 min-w-0 flex-1 cursor-text items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-sidebar-muted-foreground [-webkit-app-region:no-drag] hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-within:bg-sidebar-row-hover focus-within:text-sidebar-foreground focus-within:ring-1 focus-within:ring-inset focus-within:ring-ring/70"
-        onClick={() => searchInputRef.current?.focus()}
-      >
-        <SearchIcon className="size-4 shrink-0 text-(--sidebar-icon-color)" />
-        <SidebarInput
+    <div className="flex items-center gap-1">
+      <InputGroup size="sidebar" className="min-w-0 flex-1">
+        <InputGroupAddon>
+          {/* A 16px slot like a row's favicon, pulled out like the addon's own
+              svg: the glyph centers on the icon column and the placeholder
+              starts where the rows' labels do. */}
+          <span className="-mx-0.5 flex size-4 shrink-0 items-center justify-center">
+            <SearchIcon className="size-[13px] text-(--sidebar-icon-color)" />
+          </span>
+        </InputGroupAddon>
+        <InputGroupInput
           ref={searchInputRef}
           nativeInput
           type="search"
           value={searchQuery}
           onChange={(event) => onSearchQueryChange(event.currentTarget.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Escape" && searchExpanded && searchQuery === "") {
-              event.currentTarget.blur();
-            }
-            onSearchKeyDown(event);
-          }}
-          onFocus={(event) => {
-            if (event.currentTarget.clientWidth === 0) setSearchExpanded(true);
-          }}
-          onBlur={() => setSearchExpanded(false)}
+          onKeyDown={onSearchKeyDown}
           placeholder="Search"
           aria-label="Search threads"
           role="combobox"
@@ -104,53 +82,36 @@ export function SidebarThreadHeader({
               ? `sidebar-thread-search-result-${activeSearchResultIndex}`
               : undefined
           }
-          className={cn("min-w-0 flex-1", !searchExpanded && "@max-[178px]:max-w-0")}
         />
         {isSearching ? (
-          <Button
-            type="button"
-            size="icon-micro"
-            variant="ghost-muted"
-            className="shrink-0"
-            aria-label="Clear thread search"
-            onClick={() => {
-              onClearSearch();
-              searchInputRef.current?.focus();
-            }}
-          >
-            <XIcon className="size-3" />
-          </Button>
+          <InputGroupAddon align="inline-end">
+            {/* 2px in from the addon, so the 12px glyph centers 16px inside
+                the field like a row trailing glyph. */}
+            <Button
+              type="button"
+              size="icon-micro"
+              variant="ghost-muted"
+              className="me-0.5"
+              aria-label="Clear thread search"
+              onClick={() => {
+                onClearSearch();
+                searchInputRef.current?.focus();
+              }}
+            >
+              <XIcon className="size-3" />
+            </Button>
+          </InputGroupAddon>
         ) : null}
-      </div>
-      <div
-        className={cn(
-          "flex shrink-0 [-webkit-app-region:no-drag] items-center",
-          searchExpanded && "hidden",
-        )}
-      >
-        {hasProjects ? (
-          <>
-            {projectScope}
-            <SidebarHeaderIconButton label="Add project" onClick={onNewProject}>
-              <FolderPlusIcon />
-            </SidebarHeaderIconButton>
-          </>
-        ) : null}
+      </InputGroup>
+      {/* Three 28px controls with 4px gaps (pen s8qVFu). */}
+      <div className="flex shrink-0 items-center gap-1">
+        {hasProjects ? projectScope : null}
+        <SidebarHeaderIconButton label="Add project" onClick={onNewProject}>
+          <FolderPlusIcon />
+        </SidebarHeaderIconButton>
         <SidebarHeaderIconButton
           label="New thread"
-          tooltip={
-            showNewThreadInProjectHint ? (
-              <span className="flex flex-col gap-0.5">
-                <span>{newThreadLabel}</span>
-                <span className="text-muted-foreground">
-                  New thread in current project: Shift+click
-                  {newThreadInProjectShortcutLabel ? ` (${newThreadInProjectShortcutLabel})` : ""}
-                </span>
-              </span>
-            ) : (
-              newThreadLabel
-            )
-          }
+          tooltip={newThreadLabel}
           disabled={newThreadDisabled}
           onClick={onNewThread}
         >
@@ -165,16 +126,18 @@ export function SidebarHeaderIconButton({
   label,
   tooltip = label,
   className,
+  size = "header",
   children,
   ...rest
 }: {
   label: string;
+  size?: "header" | "footer";
   tooltip?: ReactNode;
   className?: string | undefined;
   children?: ReactNode;
 } & Omit<
   ComponentProps<typeof SidebarMenuButton>,
-  "children" | "className" | "tooltip" | "isActive" | "aria-label"
+  "children" | "className" | "tooltip" | "isActive" | "aria-label" | "size"
 >) {
   return (
     <Tooltip>
@@ -184,8 +147,9 @@ export function SidebarHeaderIconButton({
             size="icon"
             type="button"
             aria-label={label}
+            data-sidebar-header-control={size === "header" ? "" : undefined}
             {...rest}
-            className={cn("relative size-7 shrink-0", className)}
+            className={cn("relative shrink-0", size === "footer" ? "size-8" : "size-7", className)}
           />
         }
       >

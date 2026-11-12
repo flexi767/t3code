@@ -23,6 +23,7 @@ import {
 } from "~/reviewCommentContext";
 
 import { DiffCommentAnnotation } from "../../diffs/DiffCommentAnnotation";
+import { DiffFileBasename } from "../../diffs/DiffFileHeaderParts";
 import { DIFF_VIEW_UNSAFE_CSS } from "../../diffs/StyledDiffCodeView";
 import { Button } from "../../ui/button";
 import {
@@ -31,13 +32,9 @@ import {
   toViewerSide,
 } from "../PullRequestReviewAnnotation";
 import type { PendingReviewComment } from "../pullRequestReviewStore";
-import {
-  excerptExpansionOldContents,
-  excerptRows,
-  fileDiffRows,
-  rowsToPatch,
-} from "@t3tools/client-runtime/review-guide-tour";
+import { excerptRows, fileDiffRows, rowsToPatch } from "@t3tools/client-runtime/review-guide-tour";
 import type { PullRequestCompletionScope } from "../PullRequestMarkdownTextarea";
+import { excerptLoader } from "./GuideExcerpt.logic";
 import { GuideNoteMarker } from "./GuideNotes";
 import { GuideProse } from "./GuideProse";
 
@@ -101,30 +98,6 @@ function excerptSlice(file: FileDiffMetadata | null, excerpt: PullRequestReviewG
   return { fileDiff, rows: shown, shown: shown.length, total: rows.length, drawn };
 }
 
-// Other hunks shift old-side context; expand against an excerpt-matching old side.
-function excerptLoader(
-  excerpt: PullRequestReviewGuideExcerpt,
-  sliceRows: ExcerptSlice["rows"],
-  loadDiffFiles: FileDiffContentsLoader,
-): FileDiffContentsLoader | null {
-  if (sliceRows.some((row) => row.hunk !== sliceRows[0]?.hunk)) {
-    return null;
-  }
-  return async (fileDiff) => {
-    const loaded = await loadDiffFiles(fileDiff);
-    const oldContents = excerptExpansionOldContents(loaded.newFile.contents, sliceRows);
-    if (oldContents === null) return loaded;
-    return {
-      newFile: loaded.newFile,
-      oldFile: {
-        name: loaded.oldFile?.name ?? loaded.newFile.name,
-        contents: oldContents,
-        cacheKey: `${loaded.newFile.cacheKey ?? loaded.newFile.name}:excerpt:${excerpt.side}:${excerpt.start}-${excerpt.end}`,
-      },
-    };
-  };
-}
-
 export function GuideExcerpt({
   excerpt,
   file,
@@ -149,7 +122,7 @@ export function GuideExcerpt({
   return (
     <figure className="flex min-w-0 flex-col gap-1.5">
       {excerpt.caption.trim() !== "" ? (
-        <figcaption className="text-xs text-muted-foreground">
+        <figcaption className="text-meta text-muted-foreground">
           <GuideProse text={excerpt.caption} plain />
         </figcaption>
       ) : null}
@@ -166,16 +139,16 @@ export function GuideExcerpt({
           onOpenFile={onOpenFile}
         />
       ) : loading ? (
-        <p className="rounded-lg border border-border/60 px-3 py-2 text-xs text-muted-foreground">
+        <p className="rounded-lg border border-border/60 px-3 py-2 text-meta text-muted-foreground">
           Loading {excerpt.path}...
         </p>
       ) : (
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-border/60 px-3 py-2 text-xs text-muted-foreground">
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-border/60 px-3 py-2 text-meta text-muted-foreground">
           <span className="min-w-0 truncate">
             <span className="font-mono text-foreground">{excerpt.path}</span> lines {excerpt.start}-
             {excerpt.end} are not in the loaded diff.
           </span>
-          <Button size="xs" variant="outline" onClick={() => onOpenFile(excerpt.path)}>
+          <Button size="xs" variant="secondary" onClick={() => onOpenFile(excerpt.path)}>
             Open in Code
           </Button>
         </div>
@@ -206,7 +179,7 @@ function ExcerptDiff({
   onOpenFile: (path: string) => void;
 }) {
   const resolvedTheme = useRenderedAppearance();
-  const loadExcerptFiles = excerptLoader(excerpt, slice.rows, loadDiffFiles);
+  const loadExcerptFiles = excerptLoader(excerpt, file, slice.rows, loadDiffFiles);
 
   const annotations = (() => {
     const groups = new Map<string, DiffLineAnnotation<ExcerptAnnotation>>();
@@ -301,10 +274,11 @@ function ExcerptDiff({
         options={options}
         lineAnnotations={annotations}
         selectedLines={draft?.range ?? null}
+        renderHeaderPrefix={() => <DiffFileBasename path={excerpt.path} />}
         renderAnnotation={(annotation) => (
           <div className="font-sans">
             {annotation.metadata.markers.length > 0 ? (
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1 text-xs">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1 text-meta">
                 {annotation.metadata.markers.map((entry) => (
                   <span key={entry.marker} className="inline-flex items-center gap-1.5">
                     <GuideNoteMarker marker={entry.marker} />
@@ -358,7 +332,7 @@ function ExcerptDiff({
           </div>
         )}
         renderHeaderMetadata={() => (
-          <span className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span className="flex items-center gap-2 text-meta text-muted-foreground">
             <span className="tabular-nums">
               {excerpt.side === "old" ? "removed code, " : ""}showing {slice.shown} of {slice.total}{" "}
               diff lines

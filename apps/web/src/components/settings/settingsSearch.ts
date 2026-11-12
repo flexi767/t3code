@@ -10,8 +10,10 @@ import {
 } from "@t3tools/client-runtime/source-control-clients";
 import { DEFAULT_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import * as Schema from "effect/Schema";
+import { msg } from "gt-react";
 import { TYPOGRAPHY_ADVANCED_STORAGE_KEY } from "../../appearanceFonts";
 import { writeLocalStorageValue } from "../../hooks/useLocalStorage";
+import { isScrollingWorkspaceCommand } from "../../layout/layoutBehavior";
 import { commandLabel } from "./KeybindingsSettings.logic";
 import type { ResolvedSettingsScope } from "./settingsScope";
 
@@ -23,6 +25,7 @@ export type SettingsPath =
   | "/settings/appearance"
   | "/settings/chat"
   | "/settings/diffs"
+  | "/settings/layout"
   | "/settings/keybindings"
   | "/settings/snap-shot"
   | "/settings/providers"
@@ -73,6 +76,8 @@ export interface SettingsSearchItem {
   readonly textGeneratorsOnly?: boolean;
   readonly secondary?: boolean;
   readonly requiresThreadAutoSettlement?: boolean;
+  /** Hidden until Labs › Scrolling workspaces is on. */
+  readonly scrollingWorkspacesOnly?: boolean;
 }
 
 export interface SettingsSearchAvailability {
@@ -88,33 +93,35 @@ export interface SettingsSearchAvailability {
   readonly hasFastWorktreeCheckoutEnvironment?: boolean;
   /** An environment without a provider allow-list, which hides text generators. */
   readonly hasTextGeneratorsEnvironment?: boolean;
+  readonly scrollingWorkspaces?: boolean;
   readonly hasPrimaryEnvironment?: boolean;
 }
 
 export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
-  "/settings/diagnostics": "Diagnostics",
-  "/settings/projects": "Projects",
-  "/settings/general": "General",
-  "/settings/appearance": "Appearance",
-  "/settings/chat": "Chat",
-  "/settings/diffs": "Diffs & pull requests",
-  "/settings/keybindings": "Keybindings",
-  "/settings/snap-shot": "SnapShots",
-  "/settings/providers": "Providers",
-  "/settings/threads": "Threads",
-  "/settings/browser": "Browser",
-  "/settings/devices": "Devices",
-  "/settings/scheduled-tasks": "Scheduled tasks",
-  "/settings/source-control": "Source control",
-  "/settings/worktrees": "Worktrees",
-  "/settings/connections": "Environments",
-  "/settings/access": "Sharing & access",
-  "/settings/secrets": "Secrets",
-  "/settings/maintenance": "Maintenance",
-  "/settings/labs": "Labs",
-  "/settings/about": "About",
-  "/settings/voice": "Voice",
-  "/settings/archived": "Archive",
+  "/settings/diagnostics": msg("Diagnostics"),
+  "/settings/projects": msg("Projects"),
+  "/settings/general": msg("General"),
+  "/settings/appearance": msg("Appearance"),
+  "/settings/chat": msg("Chat"),
+  "/settings/diffs": msg("Diffs & pull requests"),
+  "/settings/layout": msg("Layout"),
+  "/settings/keybindings": msg("Keybindings"),
+  "/settings/snap-shot": msg("SnapShots"),
+  "/settings/providers": msg("Providers"),
+  "/settings/threads": msg("Threads"),
+  "/settings/browser": msg("Browser"),
+  "/settings/devices": msg("Devices"),
+  "/settings/scheduled-tasks": msg("Scheduled tasks"),
+  "/settings/source-control": msg("Source control"),
+  "/settings/worktrees": msg("Worktrees"),
+  "/settings/connections": msg("Environments"),
+  "/settings/access": msg("Sharing & access"),
+  "/settings/secrets": msg("Secrets"),
+  "/settings/maintenance": msg("Maintenance"),
+  "/settings/labs": msg("Labs"),
+  "/settings/about": msg("About"),
+  "/settings/voice": msg("Voice"),
+  "/settings/archived": msg("Archive"),
 };
 
 /** Sidebar order. A group without a heading is set apart by space alone. */
@@ -127,6 +134,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
     paths: [
       "/settings/general",
       "/settings/appearance",
+      "/settings/layout",
       "/settings/chat",
       "/settings/diffs",
       "/settings/keybindings",
@@ -135,7 +143,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
     ],
   },
   {
-    heading: "Agents",
+    heading: msg("Agents"),
     paths: [
       "/settings/providers",
       "/settings/threads",
@@ -145,11 +153,11 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
     ],
   },
   {
-    heading: "Code",
+    heading: msg("Code"),
     paths: ["/settings/projects", "/settings/source-control", "/settings/worktrees"],
   },
   {
-    heading: "Connections",
+    heading: msg("Connections"),
     paths: [
       "/settings/connections",
       "/settings/access",
@@ -178,6 +186,7 @@ const KEYBINDING_SEARCH_ITEMS = STATIC_KEYBINDING_COMMANDS.toSorted((left, right
     to: "/settings/keybindings" as const,
     searchTerms: [command, ...defaultKeys],
     secondary: true,
+    ...(isScrollingWorkspaceCommand(command) ? { scrollingWorkspacesOnly: true } : {}),
     ...(defaultKeys.length === 0 ? { targetId: "keybindings" } : {}),
   };
 });
@@ -247,7 +256,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/worktrees",
     scope: "project-defaults",
     searchTerms: [
-      "disk storage automatic delete deleted archived threads old inactive merged settled unchanged worktrees retention days project inherit off custom",
+      "disk storage automatic delete deleted archived threads old inactive merged settled unchanged worktrees retention days project inherit off custom local changes kept branches thread history commits default branch",
     ],
   },
   {
@@ -263,7 +272,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/maintenance",
     scope: "environment-defaults",
     searchTerms: [
-      "disk storage delete old browser artifacts screenshots captures rotated logs cleanup retention",
+      "disk storage delete old browser artifacts screenshots captures rotated logs cleanup retention recordings traces days capture links",
     ],
   },
   {
@@ -284,7 +293,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Default model",
     to: "/settings/threads",
     scope: "project-defaults",
-    searchTerms: ["new thread project provider reasoning effort"],
+    searchTerms: ["new thread project provider reasoning effort automatic"],
   },
   {
     id: "fallback-model",
@@ -304,17 +313,65 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "layout-template",
+    title: "Your layout",
+    to: "/settings/layout",
+    searchTerms: [
+      "layout panes split columns template chat terminal diff files browser drag resize",
+    ],
+  },
+  {
+    id: "layout-terminal-placement",
+    title: "Terminal",
+    to: "/settings/layout",
+    searchTerms: ["terminal placement where cmd+j opens it below the chat new tab new column"],
+  },
+  {
+    id: "layout-side-pane-placement",
+    title: "Side pane",
+    to: "/settings/layout",
+    searchTerms: ["side pane placement diff files browser pull request beside the chat new column"],
+  },
+  {
+    id: "layout-side-pane-opens-on",
+    title: "Side pane opens on",
+    to: "/settings/layout",
+    searchTerms: ["side pane first tab last used diff files browser pull request"],
+  },
+  {
+    id: "layout-new-tab-position",
+    title: "New tabs",
+    to: "/settings/layout",
+    searchTerms: ["where new tabs open after the current tab at the end cmd+t"],
+  },
+  {
+    id: "layout-when-no-room",
+    title: "When it doesn't fit",
+    to: "/settings/layout",
+    searchTerms: ["no room shrink then scroll always shrink always scroll strip columns width"],
+    scrollingWorkspacesOnly: true,
+  },
+  {
+    id: "layout-three-finger-swipe",
+    title: "Three-finger swipe",
+    to: "/settings/layout",
+    searchTerms: ["trackpad gesture swipe between pages column workspace"],
+    desktopOnly: true,
+    macOnly: true,
+    scrollingWorkspacesOnly: true,
+  },
+  {
     id: "color-scheme",
-    title: "Color scheme",
+    title: "Appearance mode",
     to: "/settings/appearance",
-    searchTerms: ["appearance light dark system mode"],
+    searchTerms: ["color scheme light dark system black chrome"],
     targetId: "appearance",
   },
   {
     id: "theme",
     title: "Themes",
     to: "/settings/appearance",
-    searchTerms: ["appearance colors palette custom import"],
+    searchTerms: ["appearance colors palette custom import export download t3 code classic old"],
     targetId: "appearance",
   },
   {
@@ -323,13 +380,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Contrast",
     to: "/settings/appearance",
     searchTerms: ["colors borders interface"],
-  },
-  {
-    // Prefixed because the slider control already owns the `glass-opacity` id.
-    id: "setting-glass-opacity",
-    title: "Glass opacity",
-    to: "/settings/appearance",
-    searchTerms: ["transparent transparency solid menus dialogs composer"],
   },
   {
     id: "diff-color-scheme",
@@ -364,6 +414,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["latex tex katex equations formulas markdown"],
   },
   {
+    id: "surface-style",
+    title: "Style",
+    to: "/settings/appearance",
+    searchTerms: [
+      "surface buttons composer finish standard flat soft gloss glossy accent outline aqua gradient rim",
+    ],
+  },
+  {
     id: "panel-animations",
     title: "Panel animations",
     to: "/settings/appearance",
@@ -374,6 +432,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/appearance",
     searchTerms: ["dev nightly latest channel artwork pill label hide none"],
     targetId: "appearance-interface",
+  },
+  {
+    id: "hide-window-controls",
+    title: "Hide window controls when the sidebar is collapsed",
+    to: "/settings/appearance",
+    searchTerms: ["traffic lights close minimize zoom buttons titlebar"],
+    desktopOnly: true,
+    macOnly: true,
   },
   {
     id: "interface-font",
@@ -419,19 +485,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["long lines code blocks diffs file previews"],
   },
   {
-    id: "composer-context",
-    title: "Composer context",
-    to: "/settings/appearance",
-  },
-  {
     id: "project-grouping",
-    title: "Project grouping",
+    title: msg("Project grouping"),
     to: "/settings/general",
     searchTerms: ["combine matching repositories environments sidebar"],
   },
   {
     id: "project-order",
-    title: "Project order",
+    title: msg("Project order"),
     to: "/settings/general",
     searchTerms: ["sort projects sidebar manual created recent"],
   },
@@ -447,19 +508,31 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "snooze-limited-threads",
     title: "Snooze until limits reset",
     to: "/settings/threads",
-    searchTerms: ["usage quota rate limit reset wake recover continue"],
+    searchTerms: [
+      "usage quota rate limit reset wake recover continue reported reset time combine auto-resume wake",
+    ],
   },
   {
     id: "auto-resume-limited-threads",
     title: "Resume after usage limits",
     to: "/settings/threads",
-    searchTerms: ["usage quota rate limit reset recover continue"],
+    searchTerms: [
+      "usage quota rate limit reset recover continue reported reset time cancel scheduled continuation",
+    ],
   },
   {
     id: "working-shelf",
-    title: "Working section",
+    title: msg("Working section"),
     to: "/settings/general",
     searchTerms: ["hide fold running monitoring threads inbox sidebar shelf"],
+  },
+  {
+    id: "scrolling-workspaces",
+    title: "Scrolling workspaces",
+    to: "/settings/labs",
+    searchTerms: [
+      "beta labs niri strip scroll sideways workspaces overview layout tour swipe panes shrink",
+    ],
   },
   {
     id: "boring-sidebar",
@@ -487,6 +560,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/chat",
     searchTerms: [
       "hide tool calls commands edits searches work log activity quiet chat zen final answers only",
+    ],
+  },
+  {
+    id: "screen-reader-announcements",
+    title: "Screen reader announcements",
+    to: "/settings/chat",
+    searchTerms: [
+      "accessibility a11y screen reader nvda jaws voiceover orca narrator speech announce read aloud messages activity steps",
     ],
   },
   {
@@ -672,13 +753,23 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "in-app-notifications",
-    title: "In-app notifications",
+    title: msg("In-app notifications"),
     to: "/settings/general",
-    searchTerms: ["notification toast popup completion input approval failure"],
+    searchTerms: [
+      "notification toast popup completion input approval failure input approval focus",
+    ],
+  },
+  {
+    id: "language",
+    title: msg("Language"),
+    to: "/settings/general",
+    searchTerms: [
+      "locale translation english deutsch german español spanish français french português portuguese brasil brazilian chinese 中文 japanese 日本語 korean 한국어 russian русский sprache idioma langue 语言 言語 언어 язык",
+    ],
   },
   {
     id: "time-format",
-    title: "Time format",
+    title: msg("Time format"),
     to: "/settings/general",
     searchTerms: ["timestamp clock locale system browser os 12 hour 24 hour"],
   },
@@ -699,25 +790,29 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "default-diff-file-state",
     title: "Default diff file state",
     to: "/settings/diffs",
-    searchTerms: ["collapsed expanded collapse expand files pull request pr code tab"],
+    searchTerms: [
+      "collapsed expanded collapse expand files pull request pr code tab pull request code tab opening",
+    ],
   },
   {
     id: "diff-layout",
     title: "Diff layout",
     to: "/settings/diffs",
-    searchTerms: ["stacked split side by side unified inline view"],
+    searchTerms: ["stacked split side by side unified inline view diff toolbar toggle"],
   },
   {
     id: "proactive-panels",
     title: "Open pull requests and changes panels proactively",
     to: "/settings/diffs",
-    searchTerms: ["proactive automatically open diff pull request pr right panel agent completion"],
+    searchTerms: [
+      "proactive automatically open diff pull request pr right panel agent completion working tree diff 3 files 50 lines",
+    ],
   },
   {
     id: "skills-in-slash-menu",
     title: "Show skills in slash menu",
     to: "/settings/chat",
-    searchTerms: ["command menu dollar $ slash /"],
+    searchTerms: ["command menu dollar $ slash / dollar $ always appear"],
   },
   {
     id: "composer-rich-text",
@@ -752,7 +847,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/maintenance",
     scope: "project-defaults",
     searchTerms: [
-      "resume running active interrupted work restart reboot machine crash desktop update automatically",
+      "resume running active interrupted work restart reboot machine crash desktop update automatically machine restart selected environments update older servers",
     ],
   },
   {
@@ -808,25 +903,27 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "unpin-confirmation",
-    title: "Unpin confirmation",
+    title: msg("Unpin confirmation"),
     to: "/settings/general",
     searchTerms: ["ask before thread pinned section"],
   },
   {
     id: "archive-confirmation",
-    title: "Archive confirmation",
+    title: msg("Archive confirmation"),
     to: "/settings/general",
-    searchTerms: ["ask before thread second click inline action"],
+    searchTerms: [
+      "ask before thread second click inline action second click inline archive action",
+    ],
   },
   {
     id: "delete-confirmation",
-    title: "Delete confirmation",
+    title: msg("Delete confirmation"),
     to: "/settings/general",
     searchTerms: ["ask before thread chat history"],
   },
   {
     id: "quit-confirmation",
-    title: "Quit shortcut",
+    title: msg("Quit shortcut"),
     to: "/settings/general",
     searchTerms: ["confirmation desktop app exit direct hold double click press twice"],
     desktopOnly: true,
@@ -836,7 +933,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Text generation model",
     to: "/settings/threads",
     scope: "project-defaults",
-    searchTerms: ["generated thread titles source control content default provider"],
+    searchTerms: [
+      "generated thread titles source control content default provider connected devices provider source control override",
+    ],
   },
   {
     id: "thread-title-instructions",
@@ -988,7 +1087,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Agent browser access",
     to: "/settings/browser",
     scope: "project-defaults",
-    searchTerms: ["allow disable enable open drive preview tools sessions project override"],
+    searchTerms: [
+      "allow disable enable open drive preview tools sessions project override next session start",
+    ],
   },
   {
     id: "device-sources",
@@ -1035,7 +1136,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "browser-default-viewport",
     title: "Default browser viewport",
     to: "/settings/browser",
-    searchTerms: ["preview size width height device desktop mobile rotate"],
+    searchTerms: [
+      "preview size width height device desktop mobile rotate fill fits panel device toolbar",
+    ],
   },
   {
     id: "browser-default-zoom",
@@ -1058,7 +1161,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "browser-recording-key-presses",
     title: "Show key presses in recordings",
     to: "/settings/browser",
-    searchTerms: ["browser preview keyboard shortcuts keystrokes overlay capture"],
+    searchTerms: [
+      "browser preview keyboard shortcuts keystrokes overlay capture password fields excluded",
+    ],
   },
   {
     id: "browser-recording-mouse-presses",
@@ -1070,7 +1175,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "browser-link-target",
     title: "Open links in",
     to: "/settings/browser",
-    searchTerms: ["links default browser in-app browser external open"],
+    searchTerms: [
+      "links default browser in-app browser external open hold cmd ctrl click default browser either way",
+    ],
   },
   {
     id: "browser-search-engine",
@@ -1090,14 +1197,18 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "browser-auto-show-floating-preview",
     title: "Auto-show floating preview",
     to: "/settings/browser",
-    searchTerms: ["agent opens browser device simulator pop into view hide"],
+    searchTerms: [
+      "agent opens browser device simulator pop into view hide unless agent says otherwise",
+    ],
   },
   {
     id: "automatic-pull",
     title: "Automatically pull",
     to: "/settings/source-control",
     scope: "project-defaults",
-    searchTerms: ["auto pull default branch current checkout fast forward upstream"],
+    searchTerms: [
+      "auto pull default branch current checkout fast forward upstream no local changes or commits",
+    ],
   },
   {
     id: "remove-agent-credits-on-merge",
@@ -1113,7 +1224,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Default merge method",
     to: "/settings/source-control",
     scope: "project-defaults",
-    searchTerms: ["pull request merge squash rebase last selected"],
+    searchTerms: ["pull request merge squash rebase last selected most recently this device"],
   },
   {
     id: "source-control",
@@ -1165,7 +1276,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Source control writer model",
     to: "/settings/source-control",
     searchTerms: [
-      "override generated commit change request pr titles descriptions branch bookmark",
+      "override generated commit change request pr titles descriptions branch bookmark source control text branch bookmark names",
     ],
     environmentOnly: true,
     scope: "project-defaults",
@@ -1347,6 +1458,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/appearance": null,
   "/settings/chat": null,
   "/settings/diffs": null,
+  "/settings/layout": null,
   "/settings/snap-shot": null,
   "/settings/keybindings": null,
   "/settings/providers": null,
@@ -1489,7 +1601,8 @@ export function filterAvailableSettingsSearchItems(
       (!item.peerLinksOnly || availability.hasPeerLinkHost === true) &&
       (!item.fastWorktreeCheckoutOnly ||
         availability.hasFastWorktreeCheckoutEnvironment === true) &&
-      (!item.textGeneratorsOnly || availability.hasTextGeneratorsEnvironment === true),
+      (!item.textGeneratorsOnly || availability.hasTextGeneratorsEnvironment === true) &&
+      (!item.scrollingWorkspacesOnly || availability.scrollingWorkspaces === true),
   );
 }
 
@@ -1511,6 +1624,7 @@ export function settingsForThisPlatform(
 export function searchSettings(
   query: string,
   items: ReadonlyArray<SettingsSearchItem> = SETTINGS_SEARCH_ITEMS,
+  translate: (message: string) => string = (message) => message,
 ): ReadonlyArray<SettingsSearchItem> {
   const normalizedQuery = normalizeSearchText(query);
   if (normalizedQuery.length === 0) return [];
@@ -1522,6 +1636,9 @@ export function searchSettings(
       const fields = [
         title,
         normalizeSearchText(SETTINGS_SECTION_LABELS[item.to]),
+        // The labels as displayed, so search also works in the active language.
+        normalizeSearchText(translate(item.title)),
+        normalizeSearchText(translate(SETTINGS_SECTION_LABELS[item.to])),
         ...(item.searchTerms ?? []).map(normalizeSearchText),
       ];
       if (!queryTokens.every((token) => fields.some((field) => field.includes(token)))) return [];

@@ -2537,8 +2537,8 @@ export const stageDesktopDmgBackground = Effect.fn("stageDesktopDmgBackground")(
   }
 
   for (const output of [
-    { suffix: "", width: 640, height: 432 },
-    { suffix: "@2x", width: 1280, height: 864 },
+    { suffix: "", width: 660, height: 432 },
+    { suffix: "@2x", width: 1320, height: 864 },
   ] as const) {
     const targetPath = path.join(
       stageResourcesDir,
@@ -2899,15 +2899,15 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       title: `${resolveDesktopProductName(version)} ${version} Installer`,
       background: `dmg/dmg-background-${updateChannel}.png`,
       window: {
-        width: 640,
+        width: 660,
         // DMG bounds include Finder's 32px title bar; keep that artwork strip clear.
         height: 432,
       },
       contents: [
-        { x: 166, y: 214, type: "file" },
-        { x: 474, y: 214, type: "link", path: "/Applications" },
+        { x: 180, y: 182, type: "file" },
+        { x: 480, y: 182, type: "link", path: "/Applications" },
       ],
-      iconSize: 120,
+      iconSize: 128,
       iconTextSize: 12,
     };
   }
@@ -2933,7 +2933,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ],
       desktop: {
         entry: {
-          StartupWMClass: "t3code",
+          // Match Electron's WM_CLASS from setDesktopName so docks use this launcher.
+          StartupWMClass: "com.t3tools.T3Code",
         },
       },
     };

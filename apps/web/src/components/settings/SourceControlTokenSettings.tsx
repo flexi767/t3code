@@ -5,7 +5,7 @@ import {
   type SettingsSecretValue,
 } from "@t3tools/contracts";
 import { ExternalLinkIcon } from "lucide-react";
-import { useState } from "react";
+import { useId, useState } from "react";
 
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import {
@@ -34,6 +34,9 @@ export function SourceControlTokenSettings({
   readonly credentials: SourceControlHostCredentials;
   readonly onSaved: () => void;
 }) {
+  const id = useId();
+  const hostInputId = `${definition.kind}-token-host-${environmentId}-${id}`;
+  const tokenInputId = `${definition.kind}-token-${environmentId}-${id}`;
   const { tokens } = useEnvironmentSettings(environmentId, (settings) =>
     readHostCredentialSettings(settings, definition.kind),
   );
@@ -87,12 +90,14 @@ export function SourceControlTokenSettings({
     >
       {/* Locked while saving: a successful save clears the draft, which would drop edits made mid-request. */}
       <fieldset disabled={saving} className="contents">
-        <p className="max-w-2xl text-xs leading-relaxed text-muted-foreground">
+        <p className="max-w-2xl text-meta leading-relaxed text-muted-foreground">
           A token saved here is used before{" "}
-          <code className="rounded bg-muted px-1 py-px text-2xs">{credentials.tokenEnvVar}</code>{" "}
+          <code className="rounded bg-muted px-1 py-px text-caption">
+            {credentials.tokenEnvVar}
+          </code>{" "}
           and the{" "}
-          <code className="rounded bg-muted px-1 py-px text-2xs">{credentials.cliName}</code> login,
-          so {definition.label} works without the {credentials.cliLabel}. Give it{" "}
+          <code className="rounded bg-muted px-1 py-px text-caption">{credentials.cliName}</code>{" "}
+          login, so {definition.label} works without the {credentials.cliLabel}. Give it{" "}
           {credentials.tokenAccess}.{" "}
           {normalizedHost || defaultHost ? (
             <InlineButton
@@ -111,9 +116,9 @@ export function SourceControlTokenSettings({
         </p>
         <div className="grid gap-3 sm:grid-cols-[12rem_1fr]">
           <div className="grid gap-1.5">
-            <Label htmlFor={`${definition.kind}-token-host-${environmentId}`}>Host</Label>
+            <Label htmlFor={hostInputId}>Host</Label>
             <Input
-              id={`${definition.kind}-token-host-${environmentId}`}
+              id={hostInputId}
               autoComplete="off"
               size="sm"
               placeholder={defaultHost}
@@ -122,9 +127,9 @@ export function SourceControlTokenSettings({
             />
           </div>
           <div className="grid gap-1.5">
-            <Label htmlFor={`${definition.kind}-token-${environmentId}`}>Token</Label>
+            <Label htmlFor={tokenInputId}>Token</Label>
             <SecretSourceInput
-              id={`${definition.kind}-token-${environmentId}`}
+              id={tokenInputId}
               size="sm"
               aria-label={`${definition.label} token`}
               configured={isSaved && !isSecretReference(savedToken)}
@@ -136,7 +141,7 @@ export function SourceControlTokenSettings({
           </div>
         </div>
         <div className="flex items-center justify-between gap-3">
-          <p className="text-xs text-muted-foreground">
+          <p className="text-meta text-muted-foreground">
             {savedHosts.length === 0
               ? `No token saved; the server uses ${credentials.tokenEnvVar} or the ${credentials.cliName} login.`
               : `Saved for ${savedHosts.join(", ")}.`}
@@ -145,7 +150,7 @@ export function SourceControlTokenSettings({
             {isSaved ? (
               <Button
                 size="xs"
-                variant="outline"
+                variant="secondary"
                 disabled={saving}
                 onClick={() => void save(normalizedHost, "")}
               >

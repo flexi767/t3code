@@ -262,7 +262,7 @@ function SnoozePresetList(props: {
 
   return (
     <div
-      className="flex flex-col gap-1.5 pt-3 pb-2"
+      className="@container/snooze flex flex-col gap-1.5 pt-3 pb-2"
       onBlur={(event) => {
         const list = event.currentTarget;
         const next = event.relatedTarget;
@@ -275,40 +275,59 @@ function SnoozePresetList(props: {
         });
       }}
     >
-      {props.presets.map((preset, index) => {
-        const preview = previews[index]!;
-        return (
-          <div
-            key={props.keys[index]}
-            role="group"
-            aria-label={`Snooze option ${index + 1}`}
-            className="flex flex-wrap items-center gap-2"
-          >
-            <SnoozePresetFields preset={preset} onChange={(next) => props.onChange(index, next)} />
-            <div className="ml-auto flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-              {preview.tone === "menu" ? (
-                <span className="truncate">
-                  <span className="text-foreground">{preview.label}</span>
-                  <span className="ps-2 tabular-nums">{preview.when}</span>
-                </span>
-              ) : (
-                <span className="truncate">{preview.text}</span>
-              )}
-              <Button
-                variant="ghost-muted"
-                size="icon-sm"
-                aria-label={`Remove snooze option ${index + 1}`}
-                onClick={() => props.onRemove(index)}
-              >
-                <XIcon />
-              </Button>
+      {/* Wide, rows share one grid: when, "at", amount or time, unit, preview, remove.
+          Narrow, each row puts its preview and remove button on a second line. */}
+      <div className="flex flex-col gap-3 @min-[37rem]/snooze:grid @min-[37rem]/snooze:grid-cols-[repeat(4,auto)_minmax(0,1fr)_auto] @min-[37rem]/snooze:items-center @min-[37rem]/snooze:gap-x-2 @min-[37rem]/snooze:gap-y-1.5">
+        {props.presets.map((preset, index) => {
+          const preview = previews[index]!;
+          return (
+            <div
+              key={props.keys[index]}
+              role="group"
+              aria-label={`Snooze option ${index + 1}`}
+              className="flex flex-col gap-1 @min-[37rem]/snooze:col-span-full @min-[37rem]/snooze:items-center @min-[37rem]/snooze:gap-x-2 @min-[37rem]/snooze:grid @min-[37rem]/snooze:grid-cols-subgrid"
+            >
+              <SnoozePresetFields
+                preset={preset}
+                onChange={(next) => props.onChange(index, next)}
+              />
+              <div className="flex min-w-0 items-center gap-2 text-meta text-muted-foreground @min-[37rem]/snooze:contents">
+                {preview.tone === "menu" ? (
+                  <span className="flex min-w-0 justify-between gap-2 @min-[37rem]/snooze:col-start-5">
+                    <span className="truncate text-foreground">{preview.label}</span>
+                    <span className="shrink-0 tabular-nums">{preview.when}</span>
+                  </span>
+                ) : (
+                  <span className="truncate @min-[37rem]/snooze:col-start-5">{preview.text}</span>
+                )}
+                <Button
+                  variant="ghost-muted"
+                  size="icon-sm"
+                  className="ms-auto"
+                  aria-label={`Remove snooze option ${index + 1}`}
+                  onClick={() => props.onRemove(index)}
+                >
+                  <XIcon />
+                </Button>
+              </div>
             </div>
-          </div>
-        );
-      })}
-      <p className="text-xs text-muted-foreground">
-        {menuOrder.length === 0 ? "Menus offer only Custom…" : `Menu now: ${menuOrder.join(" · ")}`}
-      </p>
+          );
+        })}
+      </div>
+      <div className="text-meta text-muted-foreground">
+        {menuOrder.length === 0 ? (
+          "Menus offer only Custom…"
+        ) : (
+          <>
+            <p>Menu now</p>
+            <ol className="mt-1 grid gap-1">
+              {menuOrder.map((label) => (
+                <li key={label}>{label}</li>
+              ))}
+            </ol>
+          </>
+        )}
+      </div>
       <div>
         <Button
           variant="ghost-muted"
@@ -320,7 +339,7 @@ function SnoozePresetList(props: {
           Add option
         </Button>
         {props.presets.length >= MAX_SNOOZE_PRESETS ? (
-          <span className="ps-2 text-xs text-muted-foreground">
+          <span className="ps-2 text-meta text-muted-foreground">
             Up to {MAX_SNOOZE_PRESETS} options
           </span>
         ) : null}
@@ -339,7 +358,7 @@ function SnoozePresetFields(props: {
   // misclick on "When" can be undone without retyping it.
   const [memory, setMemory] = useState<KindMemory>({ minutes: 60, time: "09:00" });
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-2">
+    <div className="flex max-w-full min-w-0 flex-wrap items-center gap-2 @min-[37rem]/snooze:contents">
       <Select
         value={when}
         items={WHEN_LABELS}
@@ -356,12 +375,12 @@ function SnoozePresetFields(props: {
           onChange(next);
         }}
       >
-        <SelectTrigger size="sm" className="w-32" aria-label="When">
+        <SelectTrigger size="sm" className="w-32 min-w-0" aria-label="When">
           <SelectValue />
         </SelectTrigger>
         <SelectPopup>
           {WHEN_VALUES.map((value) => (
-            <SelectItem hideIndicator key={value} value={value}>
+            <SelectItem key={value} value={value}>
               {WHEN_LABELS[value]}
             </SelectItem>
           ))}
@@ -373,11 +392,11 @@ function SnoozePresetFields(props: {
           onChange={(minutes) => onChange({ ...preset, minutes })}
         />
       ) : (
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <span className="text-xs text-muted-foreground">at</span>
+        <div className="flex min-w-0 flex-wrap items-center gap-2 @min-[37rem]/snooze:contents">
+          <span className="text-meta text-muted-foreground">at</span>
           <Input
             nativeInput
-            size="sm"
+            size="settings"
             type="time"
             className="w-32"
             aria-label="Time"
@@ -410,10 +429,10 @@ function DurationFields(props: { minutes: number; onChange: (minutes: number) =>
     setDraft(amount);
   }
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-2">
+    <div className="flex max-w-full min-w-0 flex-wrap items-center gap-2 @min-[37rem]/snooze:contents">
       <NumberField
         size="sm"
-        className="w-32"
+        className="w-32 shrink-0 @min-[37rem]/snooze:col-start-3"
         min={1}
         max={maxAmount}
         step={1}
@@ -454,12 +473,12 @@ function DurationFields(props: { minutes: number; onChange: (minutes: number) =>
           }
         }}
       >
-        <SelectTrigger size="sm" className="w-28" aria-label="Unit">
+        <SelectTrigger size="sm" className="w-28 min-w-0" aria-label="Unit">
           <SelectValue />
         </SelectTrigger>
         <SelectPopup>
           {(Object.keys(UNIT_LABELS) as DurationUnit[]).map((value) => (
-            <SelectItem hideIndicator key={value} value={value}>
+            <SelectItem key={value} value={value}>
               {(amount === 1 ? SINGULAR_UNIT_LABELS : UNIT_LABELS)[value]}
             </SelectItem>
           ))}

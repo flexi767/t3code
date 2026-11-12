@@ -34,6 +34,10 @@ interface AcpSessionProject {
   readonly workspaceRoot: string;
 }
 
+function needsImport(session: AcpRegistrySession) {
+  return session.importedThreadId === null || session.nativeHistoryPending === true;
+}
+
 function reportFailure(title: string, result: AtomCommandResult<unknown, unknown>) {
   if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return;
   const error = squashAtomCommandFailure(result);
@@ -223,7 +227,7 @@ function InstanceSessionManagement(
       setSessions((current) =>
         current.map((candidate) =>
           candidate.sessionId === session.sessionId
-            ? { ...candidate, importedThreadId: result.value.threadId }
+            ? { ...candidate, importedThreadId: result.value.threadId, nativeHistoryPending: false }
             : candidate,
         ),
       );
@@ -403,7 +407,7 @@ function InstanceSessionManagement(
               <Button
                 type="button"
                 size="sm"
-                variant="outline"
+                variant="secondary"
                 disabled={props.readOnly || loggingOut}
                 onClick={() => void logoutProvider()}
               >
@@ -420,7 +424,12 @@ function InstanceSessionManagement(
                     props.onProjectChange(value as ProjectId);
                   }}
                 >
-                  <SelectTrigger aria-label="Project for ACP sessions" className="w-40" size="sm">
+                  <SelectTrigger
+                    variant="well"
+                    aria-label="Project for ACP sessions"
+                    className="w-40"
+                    size="compact"
+                  >
                     <SelectValue>
                       {props.projects.find((project) => project.id === projectId)?.title}
                     </SelectValue>
@@ -436,7 +445,7 @@ function InstanceSessionManagement(
                 <Button
                   type="button"
                   size="sm"
-                  variant="outline"
+                  variant="secondary"
                   disabled={!canRead || loading || projectId === null}
                   onClick={() => void loadSessions()}
                 >
@@ -450,7 +459,7 @@ function InstanceSessionManagement(
         {canList && (sessions.length > 0 || nextCursor !== null) ? (
           <>
             {sessions.length > 0 ? (
-              <div className="divide-y divide-border/60 border-y border-border/60">
+              <div className="divide-y divide-border border-y border-border">
                 {sessions.map((session) => (
                   <div
                     key={session.sessionId}
@@ -472,12 +481,12 @@ function InstanceSessionManagement(
                         disabled={
                           !canOperate ||
                           !canImport ||
-                          session.importedThreadId !== null ||
+                          !needsImport(session) ||
                           importingSessionId !== null
                         }
                         onClick={() => void importNativeSession(session)}
                       >
-                        {session.importedThreadId !== null
+                        {!needsImport(session)
                           ? "Imported"
                           : importingSessionId === session.sessionId
                             ? "Importing"
@@ -521,10 +530,10 @@ function InstanceSessionManagement(
       </SettingsRow>
 
       {canConfigureProviders ? (
-        <div className="grid gap-3 border-t border-border/60 px-3 py-3 sm:px-4">
+        <div className="grid gap-3 border-t border-border px-3 py-3 sm:px-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <p className="text-xs font-medium text-foreground">Agent providers</p>
+              <p className="text-xs font-medium text-strong-foreground">Agent providers</p>
               <p className="text-xs text-muted-foreground">
                 Configure non-secret routing. Headers are write-only.
               </p>
@@ -532,7 +541,7 @@ function InstanceSessionManagement(
             <Button
               type="button"
               size="xs"
-              variant="outline"
+              variant="secondary"
               disabled={
                 !canRead || loadingProviders || savingProviderId !== null || projectId === null
               }
@@ -567,7 +576,7 @@ function InstanceSessionManagement(
           ) : null}
 
           {providers.length > 0 ? (
-            <div className="divide-y divide-border/60 border-y border-border/60">
+            <div className="divide-y divide-border border-y border-border">
               {providers.map((provider) => {
                 const draft = providerDrafts[provider.providerId] ?? {
                   apiType: provider.current?.apiType ?? provider.supported[0] ?? "",
@@ -583,19 +592,19 @@ function InstanceSessionManagement(
                   <div key={provider.providerId} className="grid gap-2 py-3">
                     <div className="flex items-center justify-between gap-2">
                       <div className="min-w-0">
-                        <p className="truncate text-xs font-medium text-foreground">
+                        <p className="truncate text-label text-strong-foreground">
                           {provider.providerId}
                         </p>
-                        <p className="text-3xs text-muted-foreground">
-                          {provider.current === null ? "Disabled" : "Configured"}
-                          {provider.required ? " · Required" : ""}
-                        </p>
+                        <div className="flex flex-col gap-0.5 text-meta text-muted-foreground">
+                          <span>{provider.current === null ? "Disabled" : "Configured"}</span>
+                          {provider.required ? <span>Required</span> : null}
+                        </div>
                       </div>
                       <div className="flex items-center gap-1">
                         <Button
                           type="button"
                           size="xs"
-                          variant="outline"
+                          variant="secondary"
                           disabled={
                             props.readOnly ||
                             savingProviderId !== null ||

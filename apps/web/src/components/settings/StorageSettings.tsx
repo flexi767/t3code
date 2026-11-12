@@ -5,6 +5,7 @@ import type {
 } from "@t3tools/contracts";
 import { resolvePastedPath } from "@t3tools/shared/path";
 import { resolveWorktreeCleanup } from "@t3tools/shared/projectSettings";
+import { CalendarIcon } from "lucide-react";
 import { useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -23,15 +24,10 @@ import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 
 import { Input } from "../ui/input";
+import { InputGroup, InputGroupInput, InputGroupUnit } from "../ui/input-group";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
-import {
-  NumberField,
-  NumberFieldDecrement,
-  NumberFieldGroup,
-  NumberFieldIncrement,
-  NumberFieldInput,
-} from "../ui/number-field";
+import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
 import { DatabaseStorageNotice } from "./DatabaseStorageNotice";
 import { AdvancedSettings } from "./AdvancedSettings";
@@ -47,7 +43,7 @@ import {
   useScopedSettingsMixed,
   useUpdateScopedSettings,
 } from "./useScopedSettings";
-import { settingsScopeEnvironmentLabel } from "./settingsScopeAxis";
+import { settingsScopeEnvironmentLabels } from "./settingsScopeAxis";
 
 export function WorktreesDirectoryRow() {
   const { connectedEnvironments, targets } = useSettingsScope();
@@ -83,6 +79,7 @@ export function WorktreesDirectoryRow() {
       }
       control={
         <Input
+          size="settings"
           key={`${scopeKey}:${mixed}:${settings.worktreesDirectory}`}
           aria-label="Worktree location"
           autoCapitalize="none"
@@ -109,65 +106,168 @@ export function WorktreesDirectoryRow() {
   );
 }
 
+type SaveOptions = Parameters<ReturnType<typeof useUpdateScopedSettings>>[1];
+
+const RETENTION_PRESET_DAYS = [1, 3, 7, 14, 30, 60, 90, 180, 365] as const;
+const MIN_RETENTION_DAYS = 1;
+const MAX_RETENTION_DAYS = 3650;
+// Opening a custom draft must not enable cleanup before its first save.
+const DEFAULT_RETENTION_DAYS = 8;
+
+function formatRetentionDays(days: number): string {
+  return `After ${days} ${days === 1 ? "day" : "days"}`;
+}
+
+/**
+ * A retention duration: Off, a preset, or Custom with a days field for any
+ * value in range. A stored value that is not a preset opens as Custom.
+ */
 function RetentionControl({
   label,
   value,
   onChange,
-  minimum = 1,
+  minimum = MIN_RETENTION_DAYS,
 }: {
   label: string;
   value: number | null;
-  onChange: (value: number | null) => void;
+  onChange: (value: number | null, onFailed: () => void) => void;
   minimum?: number;
 }) {
-  const [draft, setDraft] = useState(value);
+  const [customRequested, setCustomRequested] = useState(false);
+  const [draft, setDraft] = useState(String(value ?? DEFAULT_RETENTION_DAYS));
   const [savedValue, setSavedValue] = useState(value);
+  const edited = useRef(false);
+  const menuOpen = useRef(false);
+  const pending = useRef<{ days: number | null } | null>(null);
+  const [submitted, setSubmitted] = useState<{ days: number | null } | null>(null);
+  const input = useRef<HTMLInputElement>(null);
+  const row = useRef<HTMLDivElement>(null);
   if (savedValue !== value) {
     setSavedValue(value);
-    setDraft(value);
+    setSubmitted(null);
+    setDraft(String(value ?? DEFAULT_RETENTION_DAYS));
   }
-
+  const currentValue = submitted ? submitted.days : value;
+  const isPreset =
+    currentValue !== null && (RETENTION_PRESET_DAYS as readonly number[]).includes(currentValue);
+  const custom = customRequested || (currentValue !== null && !isPreset);
+  const selected = custom ? "custom" : currentValue === null ? "off" : String(currentValue);
+  const save = (days: number | null) => {
+    edited.current = false;
+    const submission = { days };
+    pending.current = submission;
+    setSubmitted(submission);
+    onChange(days, () => {
+      if (pending.current !== submission) return;
+      pending.current = null;
+      setSubmitted(null);
+      setDraft(String(value ?? DEFAULT_RETENTION_DAYS));
+      if (value === null) setCustomRequested(false);
+    });
+  };
+  const commit = () => {
+    const parsed = Number(draft);
+    edited.current = false;
+    if (
+      draft.trim() !== "" &&
+      Number.isInteger(parsed) &&
+      parsed >= minimum &&
+      parsed <= MAX_RETENTION_DAYS
+    ) {
+      setDraft(String(parsed));
+      if (parsed !== currentValue) save(parsed);
+    } else setDraft(String(currentValue ?? DEFAULT_RETENTION_DAYS));
+  };
   return (
-    <div className="flex items-center gap-3">
-      {value !== null ? (
-        <NumberField
-          value={draft}
-          min={minimum}
-          max={3650}
-          step={1}
-          size="sm"
-          className="w-auto"
-          onValueChange={setDraft}
-          onValueCommitted={(next) => {
-            if (next === null) setDraft(value);
-            else {
-              const days = Math.min(3650, Math.max(minimum, Math.round(next)));
-              setDraft(days);
-              onChange(days);
-            }
-          }}
+    <div
+      ref={row}
+      className="flex items-center gap-2"
+      onBlur={(event) => {
+        if (menuOpen.current || event.currentTarget.contains(event.relatedTarget)) return;
+        if (edited.current) commit();
+        else if (value === null && pending.current === null) setCustomRequested(false);
+      }}
+    >
+      <Select
+        value={selected}
+        onOpenChange={(open) => {
+          menuOpen.current = open;
+        }}
+        onValueChange={(next) => {
+          edited.current = false;
+          if (next === "off") {
+            setCustomRequested(false);
+            if (currentValue !== null) save(null);
+          } else if (next === "custom") {
+            setCustomRequested(true);
+            setDraft(String(value ?? DEFAULT_RETENTION_DAYS));
+          } else if (next !== null) {
+            setCustomRequested(false);
+            save(Number(next));
+          }
+        }}
+      >
+        <SelectTrigger
+          variant="well"
+          size="compact"
+          aria-label={label}
+          leadingIcon={<CalendarIcon />}
+          className="w-auto min-w-36"
         >
-          <NumberFieldGroup>
-            <NumberFieldDecrement aria-label={`Decrease ${label}`} />
-            <NumberFieldInput
-              aria-label={`${label} in days`}
-              size={5}
-              className="w-auto grow-0 text-right"
-            />
-            <span aria-hidden="true" className="self-center pr-2 text-xs">
-              days
-            </span>
-            <NumberFieldIncrement aria-label={`Increase ${label}`} />
-          </NumberFieldGroup>
-        </NumberField>
-      ) : (
-        <span className="text-xs text-muted-foreground">Off</span>
-      )}
-      <Switch
-        aria-label={label}
-        checked={value !== null}
-        onCheckedChange={(enabled) => onChange(enabled ? 8 : null)}
-      />
+          <SelectValue>
+            {selected === "off"
+              ? "Off"
+              : selected === "custom"
+                ? "Custom"
+                : formatRetentionDays(Number(selected))}
+          </SelectValue>
+        </SelectTrigger>
+        <SelectPopup
+          align="end"
+          alignItemWithTrigger={false}
+          finalFocus={custom ? input : undefined}
+        >
+          <SelectItem value="off">Off</SelectItem>
+          {RETENTION_PRESET_DAYS.map((days) => (
+            <SelectItem key={days} value={String(days)}>
+              {formatRetentionDays(days)}
+            </SelectItem>
+          ))}
+          <SelectItem value="custom">Custom</SelectItem>
+        </SelectPopup>
+      </Select>
+      {custom ? (
+        <InputGroup className="w-24">
+          <InputGroupInput
+            ref={input}
+            autoFocus
+            size="settings"
+            type="number"
+            min={minimum}
+            max={MAX_RETENTION_DAYS}
+            value={draft}
+            aria-label={`${label} in days`}
+            onChange={(event) => {
+              edited.current = true;
+              setDraft(event.target.value);
+            }}
+            onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+              if (event.key === "Enter") {
+                commit();
+                event.currentTarget.blur();
+              } else if (event.key === "Escape") {
+                event.preventDefault();
+                event.stopPropagation();
+                edited.current = false;
+                setDraft(String(value ?? DEFAULT_RETENTION_DAYS));
+                if (value === null) setCustomRequested(false);
+              }
+            }}
+          />
+          <InputGroupUnit>days</InputGroupUnit>
+        </InputGroup>
+      ) : null}
     </div>
   );
 }
@@ -188,7 +288,15 @@ function lastRunSummary(
   if (entries.length === machineCount && entries.every((entry) => entry.counts === first.counts)) {
     return `${first.counts} on every machine`;
   }
-  return entries.map((entry) => `${entry.label}: ${entry.counts}`).join(" · ");
+  return (
+    <span className="grid gap-1">
+      {entries.map((entry) => (
+        <span key={entry.label}>
+          {entry.label}: {entry.counts}
+        </span>
+      ))}
+    </span>
+  );
 }
 
 function CleanupResults({
@@ -245,15 +353,13 @@ function CleanupResults({
             control={
               (entry.outcome === "removed" ||
                 (entry.outcome === "kept" && entry.bytes !== null)) && (
-                <span className="text-xs text-muted-foreground">
-                  {[
-                    entry.kind !== "worktree" && entry.files !== null
-                      ? `${entry.files.toLocaleString()} ${entry.files === 1 ? "file" : "files"}`
-                      : null,
-                    entry.bytes !== null ? formatBytes(entry.bytes) : null,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
+                <span className="grid justify-items-end gap-1 text-meta text-muted-foreground">
+                  {entry.kind !== "worktree" && entry.files !== null ? (
+                    <span>
+                      {entry.files.toLocaleString()} {entry.files === 1 ? "file" : "files"}
+                    </span>
+                  ) : null}
+                  {entry.bytes !== null ? <span>{formatBytes(entry.bytes)}</span> : null}
                 </span>
               )
             }
@@ -261,12 +367,12 @@ function CleanupResults({
         );
       })}
       {report.omittedCount > 0 && (
-        <p className="px-3 py-2.5 text-xs text-muted-foreground sm:px-4">
+        <p className="px-3 py-2.5 text-meta text-muted-foreground sm:px-4">
           {environmentLabel}: {report.omittedCount.toLocaleString()} more results.
         </p>
       )}
       {report.entries.length === 0 && report.omittedCount === 0 && (
-        <p className="px-3 py-2.5 text-xs text-muted-foreground sm:px-4">
+        <p className="px-3 py-2.5 text-meta text-muted-foreground sm:px-4">
           {environmentLabel}: Nothing needed cleanup.
         </p>
       )}
@@ -331,7 +437,8 @@ function CleanupSection() {
     return {
       environment,
       report,
-      label: settingsScopeEnvironmentLabel(environment, connectedEnvironments),
+      label: settingsScopeEnvironmentLabels(environment, connectedEnvironments).primary,
+      secondary: settingsScopeEnvironmentLabels(environment, connectedEnvironments).secondary,
       counts: report
         ? `${report.counts.removed} removed, ${report.counts.kept} kept${report.counts.failed > 0 ? `, ${report.counts.failed} failed` : ""}`
         : "",
@@ -381,9 +488,14 @@ function CleanupSection() {
             <span>
               {!hasRules
                 ? "Turn on a cleanup rule to use this."
-                : summaries.map(({ environment, label, description }) => (
+                : summaries.map(({ environment, label, secondary, description }) => (
                     <span key={environment.environmentId} className="block">
-                      {supported.length > 1 ? `${label}: ` : ""}
+                      {supported.length > 1 ? (
+                        <span className="block">
+                          {label}
+                          {secondary ? <span className="block">{secondary}</span> : null}
+                        </span>
+                      ) : null}
                       {description}
                     </span>
                   ))}
@@ -391,7 +503,7 @@ function CleanupSection() {
           }
           control={
             <Button
-              variant="outline"
+              variant="secondary"
               size="sm"
               disabled={pending || !hasRules || !state.some((entry) => entry.allowed)}
               onClick={() => void deleteNow()}
@@ -458,7 +570,7 @@ function StorageCleanupScopeNotice() {
   );
 }
 
-export function WorktreeCleanupSection() {
+export function WorktreeCleanupSection({ title = "Cleanup" }: { title?: string }) {
   const { scope, environments, connectedEnvironments, targets, target } = useSettingsScope();
   const scopedSettings = useScopedSettings();
   const isProjectScope = scope.kind === "project" || scope.kind === "checkout";
@@ -486,12 +598,12 @@ export function WorktreeCleanupSection() {
   // A policy locks these through worktreeCleanup, which also reaches each project's own rules.
   const lockablePath = (key: keyof WorktreeCleanupRules) =>
     isProjectScope ? ["worktreeCleanup"] : ["worktreeCleanup", `storageCleanup.${key}`];
-  const update = (patch: Partial<StorageCleanupSettings>) =>
-    updateSettings({ storageCleanup: patch });
-  const updateWorktree = (patch: Partial<WorktreeCleanupRules>) =>
+  const update = (patch: Partial<StorageCleanupSettings>, options?: SaveOptions) =>
+    updateSettings({ storageCleanup: patch }, options);
+  const updateWorktree = (patch: Partial<WorktreeCleanupRules>, options?: SaveOptions) =>
     isProjectScope
-      ? updateSettings({ worktreeCleanup: { mode: "custom", rules: patch } })
-      : update(patch);
+      ? updateSettings({ worktreeCleanup: { mode: "custom", rules: patch } }, options)
+      : update(patch, options);
 
   if (
     isProjectScope &&
@@ -501,7 +613,7 @@ export function WorktreeCleanupSection() {
     )
   ) {
     return (
-      <SettingsSection id="storage-worktrees" title="Cleanup" variant="plain">
+      <SettingsSection id="storage-worktrees" title={title} variant="plain">
         <SettingsScopeNotice inline target="all">
           Update the selected machines to configure project worktree cleanup.
         </SettingsScopeNotice>
@@ -510,14 +622,14 @@ export function WorktreeCleanupSection() {
   }
   if (!supportsStorageCleanup(connectedEnvironments)) {
     return (
-      <SettingsSection id="storage-worktrees" title="Cleanup" variant="plain">
+      <SettingsSection id="storage-worktrees" title={title} variant="plain">
         <StorageCleanupScopeNotice />
       </SettingsSection>
     );
   }
 
   return (
-    <SettingsSection id="storage-worktrees" title="Cleanup">
+    <SettingsSection id="storage-worktrees" title={title}>
       <>
         {isProjectScope && (
           <SettingsRow
@@ -533,56 +645,31 @@ export function WorktreeCleanupSection() {
             settingKeys={["worktreeCleanup"]}
             mixed={mixedModes}
             control={
-              <Select
-                value={mixedModes ? null : mode}
-                onValueChange={(next) => {
+              <ToggleGroup
+                aria-label="Automatic worktree cleanup"
+                value={mixedModes ? [] : [mode]}
+                onValueChange={(values) => {
+                  const next = values[0];
                   if (next === "inherit") clearSettings(["worktreeCleanup"]);
                   else if (next === "off") updateSettings({ worktreeCleanup: { mode: "off" } });
                   else if (next === "custom")
                     updateSettings({ worktreeCleanup: { mode: "custom", rules: {} } });
                 }}
               >
-                <SelectTrigger size="sm" aria-label="Automatic worktree cleanup">
-                  <SelectValue>
-                    {mixedModes
-                      ? "Mixed"
-                      : mode === "inherit"
-                        ? "Inherit"
-                        : mode === "off"
-                          ? "Off"
-                          : "Custom"}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem value="inherit">Inherit</SelectItem>
-                  <SelectItem value="off">Off</SelectItem>
-                  <SelectItem value="custom">Custom</SelectItem>
-                </SelectPopup>
-              </Select>
+                <Toggle value="inherit">Inherit</Toggle>
+                <Toggle value="off">Off</Toggle>
+                <Toggle value="custom">Custom</Toggle>
+              </ToggleGroup>
             }
           />
         )}
         {(!isProjectScope || (!mixedModes && mode === "custom")) && (
           <>
             <SettingsRow
-              title="Delete worktrees with deleted threads"
-              status={ruleStatus("worktreeOnDelete")}
-              managedPaths={lockablePath("worktreeOnDelete")}
-              description="Remove unused worktrees when active or archived threads are deleted. Worktrees with local changes are kept."
-              serverScoped={!isProjectScope}
-              control={
-                <Switch
-                  aria-label="Delete worktrees with deleted threads"
-                  checked={settings.worktreeOnDelete}
-                  onCheckedChange={(worktreeOnDelete) => updateWorktree({ worktreeOnDelete })}
-                />
-              }
-            />
-            <SettingsRow
               title="Delete merged worktrees"
               status={ruleStatus("worktreeOnMerge")}
               managedPaths={lockablePath("worktreeOnMerge")}
-              description="Remove worktrees whose pull request is merged and whose commits are included in the default branch."
+              description="Once the pull request for the branch is merged."
               serverScoped={!isProjectScope}
               control={
                 <Switch
@@ -593,16 +680,46 @@ export function WorktreeCleanupSection() {
               }
             />
             <SettingsRow
+              title="Delete unchanged worktrees"
+              status={ruleStatus("worktreeUnchanged")}
+              managedPaths={lockablePath("worktreeUnchanged")}
+              description="No commits beyond the default branch."
+              serverScoped={!isProjectScope}
+              control={
+                <Switch
+                  aria-label="Delete unchanged worktrees"
+                  checked={settings.worktreeUnchanged}
+                  onCheckedChange={(worktreeUnchanged) => updateWorktree({ worktreeUnchanged })}
+                />
+              }
+            />
+            <SettingsRow
+              title="Delete worktrees with deleted threads"
+              status={ruleStatus("worktreeOnDelete")}
+              managedPaths={lockablePath("worktreeOnDelete")}
+              description="When every thread using the worktree is deleted."
+              serverScoped={!isProjectScope}
+              control={
+                <Switch
+                  aria-label="Delete worktrees with deleted threads"
+                  checked={settings.worktreeOnDelete}
+                  onCheckedChange={(worktreeOnDelete) => updateWorktree({ worktreeOnDelete })}
+                />
+              }
+            />
+            <SettingsRow
               title="Delete inactive worktrees"
               status={ruleStatus("worktreeAfterDays")}
               managedPaths={lockablePath("worktreeAfterDays")}
-              description="Remove worktrees after their threads have been inactive for this many days. Branches and thread history are kept."
+              description="No thread activity for this long."
               serverScoped={!isProjectScope}
               control={
                 <RetentionControl
                   label="Delete inactive worktrees"
                   value={settings.worktreeAfterDays}
-                  onChange={(worktreeAfterDays) => updateWorktree({ worktreeAfterDays })}
+                  onChange={(worktreeAfterDays, onFailed) =>
+                    updateWorktree({ worktreeAfterDays }, { onFailed })
+                  }
                 />
               }
             />
@@ -634,27 +751,13 @@ export function WorktreeCleanupSection() {
                         label="Delete settled worktrees"
                         value={settings.worktreeSettledAfterDays}
                         minimum={0}
-                        onChange={(worktreeSettledAfterDays) =>
-                          updateWorktree({ worktreeSettledAfterDays })
+                        onChange={(worktreeSettledAfterDays, onFailed) =>
+                          updateWorktree({ worktreeSettledAfterDays }, { onFailed })
                         }
                       />
                     }
                   />
                 )}
-              <SettingsRow
-                title="Delete unchanged worktrees"
-                status={ruleStatus("worktreeUnchanged")}
-                managedPaths={lockablePath("worktreeUnchanged")}
-                description="Remove worktrees with no commits beyond the default branch."
-                serverScoped={!isProjectScope}
-                control={
-                  <Switch
-                    aria-label="Delete unchanged worktrees"
-                    checked={settings.worktreeUnchanged}
-                    onCheckedChange={(worktreeUnchanged) => updateWorktree({ worktreeUnchanged })}
-                  />
-                }
-              />
               {connectedEnvironments.every(
                 (environment) =>
                   environment.serverConfig?.environment.capabilities.storageCleanupRun === true,
@@ -683,7 +786,11 @@ export function WorktreeCleanupSection() {
                           updateWorktree({ worktreeKeepWhen: next });
                       }}
                     >
-                      <SelectTrigger size="sm" aria-label="Keep worktrees with local changes">
+                      <SelectTrigger
+                        variant="well"
+                        size="compact"
+                        aria-label="Keep worktrees with local changes"
+                      >
                         <SelectValue>
                           {ruleStatus("worktreeKeepWhen")
                             ? "Mixed"
@@ -737,8 +844,8 @@ export function StorageCleanupSections() {
       ? "Mixed across selected machines"
       : undefined;
   if (scope.kind === "project" || scope.kind === "checkout") return null;
-  const update = (patch: Partial<StorageCleanupSettings>) =>
-    updateSettings({ storageCleanup: patch });
+  const update = (patch: Partial<StorageCleanupSettings>, options: SaveOptions) =>
+    updateSettings({ storageCleanup: patch }, options);
   const databaseStorageNotice = (
     <DatabaseStorageNotice
       environments={connectedEnvironments.filter(
@@ -767,13 +874,15 @@ export function StorageCleanupSections() {
             title="Delete old browser artifacts"
             status={artifactsStatus}
             managedPaths={["storageCleanup.browserArtifactsAfterDays"]}
-            description="Delete saved browser captures after this many days. Older capture links will no longer open."
+            description="Screenshots, recordings and traces from agent browsing."
             serverScoped
             control={
               <RetentionControl
                 label="Delete old browser artifacts"
                 value={settings.browserArtifactsAfterDays}
-                onChange={(browserArtifactsAfterDays) => update({ browserArtifactsAfterDays })}
+                onChange={(browserArtifactsAfterDays, onFailed) =>
+                  update({ browserArtifactsAfterDays }, { onFailed })
+                }
               />
             }
           />
@@ -783,13 +892,13 @@ export function StorageCleanupSections() {
             title="Delete old rotated logs"
             status={logsStatus}
             managedPaths={["storageCleanup.logsAfterDays"]}
-            description="Delete inactive rotated log files after this many days. Current logs are kept."
+            description="Current logs are always kept."
             serverScoped
             control={
               <RetentionControl
                 label="Delete old rotated logs"
                 value={settings.logsAfterDays}
-                onChange={(logsAfterDays) => update({ logsAfterDays })}
+                onChange={(logsAfterDays, onFailed) => update({ logsAfterDays }, { onFailed })}
               />
             }
           />

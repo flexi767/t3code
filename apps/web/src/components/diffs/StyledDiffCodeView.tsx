@@ -7,7 +7,7 @@ import {
   type UncontrolledCodeViewProps,
 } from "@pierre/diffs/react";
 /* oxlint-enable eslint/no-restricted-imports */
-import type { Ref } from "react";
+import { type Ref } from "react";
 
 import { DIFF_SURFACE_THEME_UNSAFE_CSS } from "~/lib/diffRendering";
 import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
@@ -38,33 +38,11 @@ export const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
   [data-merge-conflict-actions],
   [data-no-newline]
 )[data-selected-line] {
-  --diffs-line-bg: light-dark(
-    color-mix(
-      in lab,
-      var(--code-background) 88%,
-      color-mix(in srgb, var(--code-background) 50%, var(--diffs-modified-base))
-    ),
-    color-mix(
-      in lab,
-      var(--code-background) 80%,
-      color-mix(in srgb, var(--code-background) 70%, var(--diffs-modified-base))
-    )
-  ) !important;
+  --diffs-line-bg: color-mix(in srgb, var(--code-background) 88%, var(--diff-modified)) !important;
 }
 
 :is([data-gutter-buffer], [data-column-number])[data-selected-line] {
-  --diffs-line-bg: light-dark(
-    color-mix(
-      in lab,
-      var(--code-background) 91%,
-      color-mix(in srgb, var(--code-background) 35%, var(--diffs-modified-base))
-    ),
-    color-mix(
-      in lab,
-      var(--code-background) 85%,
-      color-mix(in srgb, var(--code-background) 60%, var(--diffs-modified-base))
-    )
-  ) !important;
+  --diffs-line-bg: color-mix(in srgb, var(--code-background) 70.6%, var(--diff-modified)) !important;
 }
 
 [data-indicators="bars"]
@@ -94,9 +72,32 @@ export const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
   color: var(--code-foreground) !important;
 }
 
+[data-diff-type="split"][data-overflow="scroll"] [data-additions],
+[data-diff-type="split"][data-overflow="wrap"] [data-additions] [data-gutter] {
+  border-left-color: var(--divider);
+}
+
+/* The divider above is the whole split rule. Pierre's 1px code-colored edge on the
+   first column would sit between the row tint and it; the track widths are fr-based,
+   so dropping it lets rows reach the rule without moving either column. */
+[data-diff-type="split"][data-overflow="scroll"] [data-deletions],
+[data-diff-type="split"][data-overflow="wrap"] [data-deletions] [data-content] {
+  border-right-width: 0;
+}
+
+[data-diff-type="split"] [data-content-buffer],
+[data-diff-type="split"] [data-gutter-buffer="buffer"] {
+  background-image: none;
+  background-color: light-dark(
+    color-mix(in srgb, var(--color-black) 2%, transparent),
+    color-mix(in srgb, var(--color-white) 2%, transparent)
+  );
+}
+
 [data-diffs-header] {
   position: sticky !important;
-  top: 0;
+  /* Below a pane header the viewer scrolls under (--surface-top-inset). */
+  top: var(--surface-top-inset, 0px);
   z-index: 4;
   background-color: var(--code-background) !important;
   border-bottom-color: transparent !important;
@@ -119,17 +120,27 @@ export const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
   box-shadow: inset 3px 0 color-mix(in srgb, var(--code-foreground) 24%, transparent);
 }
 
-/* Hunk separators are the way to the unchanged lines between hunks. They keep the library's
-   layout, with the expand button in its own cell, but sit one step off the code surface so they
-   read as quiet controls; hover brings them forward. */
+/* Hunk separators span both split columns; their centered label expands unchanged lines.
+   The visually hidden expand button below keeps the same action keyboard-reachable. */
 :is([data-separator="line-info"], [data-separator="line-info-basic"]) {
   /* Exact and margin-free: the virtualizer places rows from hunkSeparatorHeight below. */
   height: 24px !important;
   margin-block: 0 !important;
-  --diffs-bg-separator: color-mix(in srgb, var(--code-background) 97%, var(--code-foreground));
+  --diffs-bg-separator: var(--code-background);
+  background-color: var(--code-background) !important;
 }
 
-:is([data-separator="line-info"], [data-separator="line-info-basic"]) [data-separator-content] {
+:is([data-separator="line-info"], [data-separator="line-info-basic"])
+  [data-separator-wrapper] {
+  padding-inline: 8px 12px !important;
+  background-color: transparent !important;
+}
+
+:is([data-separator="line-info"], [data-separator="line-info-basic"])
+  [data-separator-content] {
+  gap: 8px;
+  padding-inline: 0 !important;
+  background-color: transparent !important;
   color: color-mix(in srgb, var(--code-foreground) 50%, var(--code-background)) !important;
   font-family: var(--font-sans) !important;
   font-size: 11px !important;
@@ -140,14 +151,105 @@ export const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
   color: color-mix(in srgb, var(--code-foreground) 50%, var(--code-background)) !important;
 }
 
+:is([data-separator="line-info"], [data-separator="line-info-basic"])
+  [data-unmodified-lines] {
+  display: flex !important;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 8px;
+}
+
 :is([data-separator="line-info"], [data-separator="line-info-basic"])[data-expand-index]
-  :is([data-separator-content], [data-expand-button]):hover {
-  color: var(--code-foreground) !important;
-  background-color: color-mix(
-    in srgb,
-    var(--code-background) 92%,
-    var(--code-foreground)
-  ) !important;
+  [data-unmodified-lines] {
+  cursor: pointer;
+}
+
+:is([data-separator="line-info"], [data-separator="line-info-basic"])
+  [data-unmodified-lines]::before,
+:is([data-separator="line-info"], [data-separator="line-info-basic"])
+  [data-unmodified-lines]::after {
+  width: auto;
+  height: 1px;
+  flex: 1 1 auto;
+  content: "";
+  background-color: light-dark(
+    color-mix(in srgb, var(--color-black) 4.3%, transparent),
+    color-mix(in srgb, var(--color-white) 7.1%, transparent)
+  );
+}
+
+:is([data-separator="line-info"], [data-separator="line-info-basic"])[data-expand-index]
+  [data-separator-wrapper] {
+  grid-template-columns: 0 minmax(0, 1fr) !important;
+}
+
+:is([data-separator="line-info"], [data-separator="line-info-basic"])[data-expand-index]
+  [data-separator-content] {
+  grid-column: 2 !important;
+}
+
+/* Wrap mode uses display: contents for each half, so measure the whole diff. */
+[data-diff-type="split"] {
+  container-type: inline-size;
+}
+
+/* Keep the second gutter below the separator that spans from the first. */
+[data-diff-type="split"] [data-additions] [data-gutter] {
+  z-index: 2;
+}
+
+/* Paint the split separator across both columns from the first gutter. */
+[data-diff-type="split"] [data-deletions] [data-gutter]
+  :is([data-separator="line-info"], [data-separator="line-info-basic"])
+  [data-separator-wrapper] {
+  width: 100cqi;
+  z-index: 1;
+}
+
+[data-diff-type="split"][data-overflow="scroll"] [data-deletions] [data-gutter]
+  :is([data-separator="line-info"], [data-separator="line-info-basic"])
+  [data-separator-wrapper] {
+  width: 200cqi;
+}
+
+/* Visually hidden rather than display: none so the expand action stays keyboard-reachable. */
+:is([data-separator="line-info"], [data-separator="line-info-basic"])
+  [data-expand-button] {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: -1px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  clip-path: inset(50%) !important;
+  border: 0 !important;
+  white-space: nowrap !important;
+}
+
+:is([data-separator="line-info"], [data-separator="line-info-basic"]):has(
+    [data-expand-button]
+  )
+  [data-separator-content] {
+  cursor: pointer;
+}
+
+:is([data-separator="line-info"], [data-separator="line-info-basic"]):has(
+    [data-expand-button]
+  ):is(:hover, :focus-within)
+  [data-separator-content] {
+  color: color-mix(in srgb, var(--code-foreground) 76%, var(--code-background)) !important;
+}
+
+:is([data-separator="line-info"], [data-separator="line-info-basic"]):has(
+    [data-expand-button]
+  ):is(:hover, :focus-within)
+  [data-unmodified-lines]::before,
+:is([data-separator="line-info"], [data-separator="line-info-basic"]):has(
+    [data-expand-button]
+  ):is(:hover, :focus-within)
+  [data-unmodified-lines]::after {
+  background-color: color-mix(in srgb, var(--code-background) 84%, var(--code-foreground));
 }
 
 [data-diffs-header] [data-header-content] {
@@ -165,20 +267,49 @@ export const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
   align-items: center !important;
   line-height: 1 !important;
   font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
 }
 
+/* Pierre wraps each slotted header part in a block div that keeps min-width: auto, so a long name
+   would spill under the counts. The name gives way first; the suffix and the counts never shrink,
+   and the views fold their suffix away when the header is too narrow for it. */
+[data-header-content] ::slotted([slot="header-prefix"]) {
+  min-width: 0;
+}
+
+[data-header-content] ::slotted([slot="header-filename-suffix"]) {
+  flex-shrink: 0;
+}
+
+/* The header's counts and change glyph are drawn from the light DOM (DiffFileHeaderParts):
+   Pierre's own put deletions first, print raw numbers, and use its symbol set. */
 [data-diffs-header] [data-additions-count],
-[data-diffs-header] [data-deletions-count] {
-  font-family: var(--font-mono) !important;
-  font-size: 11px !important;
-  font-variant-numeric: tabular-nums;
-  line-height: 1 !important;
+[data-diffs-header] [data-deletions-count],
+[data-diffs-header] [data-change-icon] {
+  display: none !important;
 }
 
-[data-diffs-header] [data-change-icon],
+/* The gutter's add-comment button: a small filled tile with a light glyph on every theme. */
+[data-utility-button] {
+  border-radius: 5px;
+  color: white;
+}
+
 [data-diffs-header] [data-rename-icon] {
   display: block;
   flex-shrink: 0;
+}
+
+/* The header is the query container for the narrow title: under 32rem the full path gives way
+   to the slotted basename, which carries the matching @max-lg class. */
+[data-diffs-header] {
+  container-type: inline-size;
+}
+
+@container (width < 32rem) {
+  [data-diffs-header] :is([data-title], [data-prev-name], [data-rename-icon]) {
+    display: none !important;
+  }
 }
 
 [data-title] {
@@ -214,6 +345,75 @@ export const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
 }
 `;
 
+/**
+ * Each file as its own rounded card, inset from the pane and spaced apart. The host element is
+ * the file, so the card is drawn on it. The rim is a masked overlay above the file's own
+ * backgrounds, so the card adds nothing to the item heights the viewer virtualizes against.
+ * The declarations are important because the page's reset (margin, outline) outranks `:host`.
+ */
+const FILE_CARDS_UNSAFE_CSS = `
+:host {
+  position: relative !important;
+  /* The scroller keeps a stable scrollbar gutter on the right; the card ends 16px from the
+     pane edge on both sides, the toolbar's trailing glyph line. */
+  margin-inline: 16px calc(16px - var(--app-scrollbar-width)) !important;
+  border-radius: 12px !important;
+  overflow: clip !important;
+  box-shadow: var(--tooltip-shadow) !important;
+}
+:host::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+  border-radius: inherit;
+  padding: 1px;
+  background: var(--popover-rim);
+  mask:
+    linear-gradient(#000 0 0) content-box exclude,
+    linear-gradient(#000 0 0);
+}
+/* The flush list's hover edge cue would be cut by the card's rounded corner. */
+[data-diffs-header]:hover {
+  box-shadow: none !important;
+}`;
+
+const FILE_CARDS_GAP = 8;
+
+// Under a pane header the viewer scrolls under, its first file starts at the header's foot.
+const renderTopInset = () => <div aria-hidden className="h-[var(--surface-top-inset,0px)]" />;
+
+/**
+ * The viewer's handle, with start-aligned scroll targets landing at the foot of that header:
+ * index.css gives the viewer its height as scroll-padding-top, which Pierre's own scrolling
+ * does not read.
+ */
+function withTopInsetScroll<LAnnotation>(
+  handle: CodeViewHandle<LAnnotation, undefined>,
+): CodeViewHandle<LAnnotation, undefined> {
+  return {
+    ...handle,
+    scrollTo: (target) => {
+      const root = handle.getInstance()?.getContainerElement();
+      const inset = root ? Number.parseFloat(getComputedStyle(root).scrollPaddingTop) || 0 : 0;
+      handle.scrollTo(
+        inset > 0 &&
+          target.type !== "position" &&
+          target.align !== "center" &&
+          target.align !== "end"
+          ? { ...target, offset: (target.offset ?? 0) + inset }
+          : target,
+      );
+    },
+  };
+}
+
+function assignViewerRef<T>(ref: Ref<T> | undefined, value: T | null) {
+  if (typeof ref === "function") ref(value);
+  else if (ref) ref.current = value;
+}
+
 export type StyledDiffCodeViewOptions<LAnnotation> = Omit<
   NonNullable<CodeViewProps<LAnnotation, undefined>["options"]>,
   "unsafeCSS" | "itemMetrics" | "layout"
@@ -226,6 +426,8 @@ type StyledDiffCodeViewProps<LAnnotation> = (
   readonly options?: StyledDiffCodeViewOptions<LAnnotation>;
   readonly viewerRef?: Ref<CodeViewHandle<LAnnotation, undefined>>;
   readonly unsafeCSSExtra?: string;
+  /** "cards" draws each file as an inset card; the default runs files edge to edge. */
+  readonly surface?: "flush" | "cards";
 };
 
 export function StyledDiffCodeView<LAnnotation = undefined>({
@@ -233,23 +435,29 @@ export function StyledDiffCodeView<LAnnotation = undefined>({
   viewerRef,
   className,
   unsafeCSSExtra,
+  surface = "flush",
   ...props
 }: StyledDiffCodeViewProps<LAnnotation>) {
+  const cards = surface === "cards";
+  const handleRef = (handle: CodeViewHandle<LAnnotation, undefined> | null) =>
+    assignViewerRef(viewerRef, handle && withTopInsetScroll(handle));
+  const unsafeCSS = [DIFF_VIEW_UNSAFE_CSS, cards ? FILE_CARDS_UNSAFE_CSS : null, unsafeCSSExtra]
+    .filter(Boolean)
+    .join("\n");
   return (
     <DiffWorkerPoolProvider>
       <CodeView<LAnnotation>
         {...props}
-        {...(viewerRef ? { ref: viewerRef } : {})}
+        renderCodeViewHeader={props.renderCodeViewHeader ?? renderTopInset}
+        {...(viewerRef ? { ref: handleRef } : {})}
         className={
           className
-            ? `diff-render-surface [--code-background:var(--background)] outline-none ${className}`
-            : "diff-render-surface [--code-background:var(--background)] outline-none"
+            ? `diff-render-surface [--code-background:var(--code-surface)] outline-none ${className}`
+            : "diff-render-surface [--code-background:var(--code-surface)] outline-none"
         }
         options={{
           ...options,
-          unsafeCSS: unsafeCSSExtra
-            ? `${DIFF_VIEW_UNSAFE_CSS}\n${unsafeCSSExtra}`
-            : DIFF_VIEW_UNSAFE_CSS,
+          unsafeCSS,
           itemMetrics: {
             diffHeaderHeight: 32,
             hunkSeparatorHeight: 24,
@@ -261,7 +469,9 @@ export function StyledDiffCodeView<LAnnotation = undefined>({
             // row.
             paddingBottom: 8,
           },
-          layout: { paddingTop: 0, paddingBottom: 0, gap: 0 },
+          layout: cards
+            ? { paddingTop: FILE_CARDS_GAP, paddingBottom: FILE_CARDS_GAP, gap: FILE_CARDS_GAP }
+            : { paddingTop: 0, paddingBottom: 0, gap: 0 },
         }}
       />
     </DiffWorkerPoolProvider>

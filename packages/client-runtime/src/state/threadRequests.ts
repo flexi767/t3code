@@ -2,6 +2,7 @@ import type {
   EnvironmentId,
   ScopedThreadRef,
   ThreadId,
+  OrchestrationV2ProviderRef,
   OrchestrationV2ThreadProjection,
   OrchestrationV2RuntimeRequest,
   OrchestrationV2UserInputQuestion,
@@ -10,6 +11,7 @@ import type {
   ProviderApprovalDecision,
   ProviderRequestKind,
   RuntimeRequestId,
+  TurnItemId,
 } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
 import { parseThreadKey, threadKey } from "./entities.ts";
@@ -18,6 +20,7 @@ import type { EnvironmentThreadShell } from "./models.ts";
 import * as DateTime from "effect/DateTime";
 import type { AtomCommandResult } from "./runtime.ts";
 import type { ThreadStructure, ThreadStructureVisibleTurnItem } from "./models.ts";
+import { turnItemDetailRevision } from "../work-log/itemDetail.ts";
 
 export type ApprovalResponder = (
   requestId: RuntimeRequestId,
@@ -58,6 +61,8 @@ export interface ThreadPendingApproval {
   readonly fullAccessOverride?: ProviderApprovalFullAccessOverride;
   readonly appName?: string;
   readonly options?: ReadonlyArray<ProviderApprovalOption>;
+  /** Files a file-change approval touches, from the provider item it gates. */
+  readonly files?: ReadonlyArray<ThreadPendingApprovalFile>;
   readonly responseCapability: "live" | "not_resumable";
   readonly supportsFeedback?: boolean;
 }
@@ -70,6 +75,77 @@ export function fullAccessOverrideExplanation(
   return override === "ask_rule"
     ? "Full access skips approvals, but an ask rule in the agent's own settings matches this action, so it still asks. Remove or narrow that rule to stop these prompts."
     : "Full access skips approvals, but the agent still stops for a few safety checks of its own that no setting can skip, such as a delete whose path it can't verify. T3 Code can't turn these off, so check the request and approve it if it's what you expect.";
+}
+
+export interface ThreadPendingApprovalFile {
+  readonly path: string;
+  readonly source?: {
+    readonly threadId: ThreadId;
+    readonly itemId: TurnItemId;
+    readonly revision: string;
+  };
+  readonly operation?: string;
+  readonly additions?: number;
+  readonly deletions?: number;
+  /** Unified diff of the proposed change, when the provider sent one. */
+  readonly diff?: string;
+}
+
+type TurnItems = ThreadStructure["turnItems"];
+
+function sameNativeItem(
+  left: OrchestrationV2ProviderRef | null,
+  right: OrchestrationV2ProviderRef | null,
+): boolean {
+  return (
+    left !== null &&
+    right !== null &&
+    left.nativeId !== null &&
+    left.driver === right.driver &&
+    left.nativeId === right.nativeId
+  );
+}
+
+/**
+ * A file-change approval gates the provider item that carries the patch, and
+ * both share the provider's native item ref (Codex item ids, Claude tool use ids).
+ */
+function approvalFiles(
+  turnItems: TurnItems,
+  approval: TurnItems[number],
+): ThreadPendingApprovalFile[] {
+  const files: ThreadPendingApprovalFile[] = [];
+  for (const item of turnItems) {
+    if (
+      item.type !== "file_change" ||
+      item.providerTurnId !== approval.providerTurnId ||
+      item.providerThreadId !== approval.providerThreadId ||
+      !sameNativeItem(item.nativeItemRef, approval.nativeItemRef)
+    ) {
+      continue;
+    }
+    const source = {
+      threadId: item.threadId,
+      itemId: item.id,
+      revision: turnItemDetailRevision(item),
+    };
+    if (item.changes !== undefined && item.changes.length > 1) {
+      for (const change of item.changes) {
+        files.push({ path: change.path, operation: change.operation, source });
+      }
+      continue;
+    }
+    const operation = item.changes?.[0]?.operation;
+    files.push({
+      path: item.fileName,
+      source,
+      ...(operation === undefined ? {} : { operation }),
+      ...(item.additions === undefined ? {} : { additions: item.additions }),
+      ...(item.deletions === undefined ? {} : { deletions: item.deletions }),
+      ...(item.diffStr === undefined || item.diffStr.length === 0 ? {} : { diff: item.diffStr }),
+    });
+  }
+  return files;
 }
 
 export interface ThreadUserInputQuestion extends Omit<
@@ -168,6 +244,8 @@ export interface ThreadRequestsResolved {
   readonly threadId: ThreadId;
   /** Every request the thread still waits on; drafts for any other request are stale. */
   readonly pendingRequestIds: ReadonlyArray<RuntimeRequestId>;
+  /** Requests that closed without an answer (cancelled or expired), so typed drafts were never sent. */
+  readonly unansweredRequestIds: ReadonlyArray<RuntimeRequestId>;
 }
 
 const threadRequestsResolvedListeners = new Set<(event: ThreadRequestsResolved) => void>();
@@ -198,8 +276,8 @@ function notifyThreadRequestsResolved(event: ThreadRequestsResolved): void {
 }
 
 /**
- * Tracks one thread's announced pending requests. Feed it the pending ids of
- * each authoritative projection; it notifies on the first one and whenever an
+ * Tracks one thread's announced pending requests. Feed it the runtime requests
+ * of each authoritative projection; it notifies on the first one and whenever an
  * announced request is no longer pending. New requests alone stay quiet.
  */
 export function makeThreadRequestsResolvedAnnouncer(
@@ -207,20 +285,28 @@ export function makeThreadRequestsResolvedAnnouncer(
   threadId: ThreadId,
 ) {
   let announced: ReadonlySet<RuntimeRequestId> | null = null;
-  return (pendingRequestIds: ReadonlyArray<RuntimeRequestId>) => {
+  return (
+    runtimeRequests: ReadonlyArray<
+      Pick<OrchestrationV2ThreadProjection["runtimeRequests"][number], "id" | "status">
+    >,
+  ) => {
+    const pendingRequestIds = runtimeRequests.flatMap((request) =>
+      request.status === "pending" ? [request.id] : [],
+    );
     const pending = new Set(pendingRequestIds);
     const resolvedSome = announced === null || [...announced].some((id) => !pending.has(id));
     announced = pending;
-    if (resolvedSome) notifyThreadRequestsResolved({ environmentId, threadId, pendingRequestIds });
+    if (!resolvedSome) return;
+    const unansweredRequestIds = runtimeRequests.flatMap((request) =>
+      request.status === "cancelled" || request.status === "expired" ? [request.id] : [],
+    );
+    notifyThreadRequestsResolved({
+      environmentId,
+      threadId,
+      pendingRequestIds,
+      unansweredRequestIds,
+    });
   };
-}
-
-export function pendingRuntimeRequestIds(
-  projection: Pick<OrchestrationV2ThreadProjection, "runtimeRequests">,
-): RuntimeRequestId[] {
-  return projection.runtimeRequests.flatMap((request) =>
-    request.status === "pending" ? [request.id] : [],
-  );
 }
 
 export function derivePendingThreadRequests(
@@ -258,6 +344,10 @@ export function derivePendingThreadRequests(
     const item = projection.turnItems.findLast(
       (candidate) => candidate.type === "approval_request" && candidate.requestId === request.id,
     );
+    const files =
+      request.kind === "file-change" && item !== undefined
+        ? approvalFiles(projection.turnItems, item)
+        : [];
     approvals.push({
       requestId: request.id,
       requestKind: request.kind,
@@ -271,6 +361,7 @@ export function derivePendingThreadRequests(
       ...(item?.type === "approval_request" && item.options !== undefined
         ? { options: item.options }
         : {}),
+      ...(files.length > 0 ? { files } : {}),
       responseCapability: responseCapability === "live" ? "live" : "not_resumable",
       ...(request.responseCapability.type === "live" && request.responseCapability.supportsFeedback
         ? { supportsFeedback: true }

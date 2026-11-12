@@ -1,8 +1,12 @@
 import { useAtomValue } from "@effect/atom-react";
-import { scopedThreadKey } from "@t3tools/client-runtime/environment";
+import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { settlePromise } from "@t3tools/client-runtime/state/runtime";
 import type { DesktopPreviewAnnotationVoiceConfig } from "@t3tools/contracts";
 import { previewStreamDownloadUrl } from "@t3tools/client-runtime/preview/server-browser-stream";
+import { useLayoutPaneFocusedRef } from "../../layout/layoutPaneContext";
+import { useLayoutStore } from "../../layout/layoutStore";
+import { findThreadChat } from "../../layout/surfaceSync";
+import { isThreadlessSurfacesRef } from "../../threadlessSurfaces";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -18,10 +22,11 @@ import {
   type PreviewAdjustInput,
 } from "@t3tools/contracts";
 import {
+  isPreviewTabFromEarlierRun,
   normalizePreviewUrl,
   isPreviewUrlNormalizationError,
-  resolveAddressBarInput,
   previewPdfAssetUrl,
+  resolveAddressBarInput,
   resolveSearchUrlTemplate,
 } from "@t3tools/shared/preview";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
@@ -59,12 +64,13 @@ import {
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { useRightPanelStore } from "~/rightPanelStore";
 
-import { effectiveShortcutsForCommand } from "~/keybindings";
+import { effectiveShortcutsForCommand, shortcutLabelForCommand } from "~/keybindings";
 import { randomUUID } from "~/lib/utils";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import { PreviewAnnotationSpeech } from "./PreviewAnnotationSpeech";
 import { previewBridge } from "./previewBridge";
 import { subscribePreviewAction } from "./previewActionBus";
+import { reopenBrowserSurface } from "./addBrowserSurface";
 import { closePreviewSession } from "./closePreviewSession";
 import { openPreviewSession } from "./openPreviewSession";
 import { showPreviewPopup } from "./showPreviewPopup";
@@ -84,12 +90,17 @@ import { shouldShowPreviewEmptyState } from "./previewEmptyStateLogic";
 import { Badge } from "~/components/ui/badge";
 import { BrowserSurfaceSlot } from "~/browser/BrowserSurfaceSlot";
 import { alternatePreviewRuntime, useRendersServerTabNatively } from "~/browser/previewRuntime";
-import { ServerBrowserSurface, type ServerBrowserHandle } from "~/browser/ServerBrowserSurface";
+import {
+  ServerBrowserSurface,
+  handoffServerBrowserFrame,
+  type ServerBrowserHandle,
+} from "~/browser/ServerBrowserSurface";
 import { cn } from "~/lib/utils";
 import { useBrowserSurfaceStore } from "~/browser/browserSurfaceStore";
 import { usePreviewSession } from "./usePreviewSession";
 import { ZoomIndicator } from "./ZoomIndicator";
 import { AgentBrowserCursor } from "./AgentBrowserCursor";
+import { PreviewFindBar } from "./PreviewFindBar";
 import {
   findActiveBrowserRecordingRuntimeTabId,
   isBrowserRecordingStartCancelledError,
@@ -145,6 +156,14 @@ function ServerTabFileNotShown(props: {
   );
 }
 
+function focusPreviewPage(runtimeTabId: string) {
+  const active = document.activeElement;
+  if (active && active !== document.body && !active.closest("[data-preview-panel-mode]")) return;
+  document
+    .querySelector<HTMLElement>(`[data-preview-viewport="${CSS.escape(runtimeTabId)}"] webview`)
+    ?.focus();
+}
+
 export function PreviewView({
   threadRef,
   tabId: requestedTabId,
@@ -153,6 +172,7 @@ export function PreviewView({
   onSendAnnotation,
 }: Props) {
   const urlInputRef = useRef<HTMLInputElement | null>(null);
+  const [find, setFind] = useState<{ tabId: string; requestId: number } | null>(null);
   const [pickActive, setPickActive] = useState(false);
   const canSendAnnotation =
     useEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope) &&
@@ -170,6 +190,8 @@ export function PreviewView({
   const miniPlayerTabId = usePreviewMiniPlayerStore((state) =>
     selectThreadPreviewMiniPlayerTabId(state.byThreadKey, threadRef),
   );
+  const chatShown = useLayoutStore((state) => findThreadChat(state.layout, threadRef) !== null);
+  const canFloat = !isThreadlessSurfacesRef(threadRef) && chatShown;
   const addPreviewAnnotation = useComposerDraftStore((store) => store.addPreviewAnnotation);
   const addImage = useComposerDraftStore((store) => store.addImage);
   const environmentHttpBaseUrl = useEnvironmentHttpBaseUrl(threadRef.environmentId);
@@ -186,6 +208,7 @@ export function PreviewView({
   const runtimeTabId = tabId
     ? previewRuntimeTabId(threadRef, previewState.serverEpoch, tabId)
     : null;
+  if (find !== null && find.tabId !== runtimeTabId) setFind(null);
   const recordingRuntimeTabId =
     tabId && runtimeTabId
       ? activeRecordingTabIds.has(runtimeTabId)
@@ -193,6 +216,21 @@ export function PreviewView({
         : findActiveBrowserRecordingRuntimeTabId(threadRef, tabId)
       : null;
   const snapshot = tabId ? (previewState.sessions[tabId] ?? null) : null;
+  // Its tab is gone, as after a restart: navigating opens a new one in its place.
+  const lostTabId =
+    requestedTabId &&
+    snapshot === null &&
+    previewState.listLoaded &&
+    !previewState.suppressedTabIds.has(requestedTabId)
+      ? requestedTabId
+      : null;
+  // One lost to a restart of its server reopens right away, at the page it showed.
+  const lostToRestart =
+    lostTabId !== null &&
+    previewState.serverEpoch !== null &&
+    isPreviewTabFromEarlierRun(lostTabId, previewState.serverEpoch);
+  const [reopenFailedTabId, setReopenFailedTabId] = useState<string | null>(null);
+  const reopening = lostToRestart && reopenFailedTabId !== lostTabId;
   const nativeServerTab = useRendersServerTabNatively(threadRef.environmentId, snapshot);
   const isServerTab = snapshot?.runtime === "server" && !nativeServerTab;
   const serverOwnsRendering = snapshot?.runtime === "server";
@@ -219,12 +257,12 @@ export function PreviewView({
   const layoutZoomFactor = useBrowserLayoutZoomFactor(desktopOverlay?.zoomFactor ?? 1);
   const navStatus = snapshot?.navStatus ?? { _tag: "Idle" as const };
   const url = navStatus._tag === "Idle" ? "" : navStatus.url;
-  const loading = desktopOverlay?.loading ?? navStatus._tag === "Loading";
+  const loading = reopening || (desktopOverlay?.loading ?? navStatus._tag === "Loading");
   const canGoBack = desktopOverlay?.canGoBack ?? snapshot?.canGoBack ?? false;
   const canGoForward = desktopOverlay?.canGoForward ?? snapshot?.canGoForward ?? false;
   const refreshDisabled = navStatus._tag === "Idle";
   const isUnreachable = navStatus._tag === "LoadFailed";
-  const showEmptyState = shouldShowPreviewEmptyState(snapshot);
+  const showEmptyState = !reopening && shouldShowPreviewEmptyState(snapshot);
   const serverStreamPending =
     isServerTab && !showEmptyState && !isUnreachable && serverFrameTabId !== runtimeTabId;
   const controller = desktopOverlay?.controller ?? "none";
@@ -237,7 +275,40 @@ export function PreviewView({
     runtimeTabId ? (state.byTabId[runtimeTabId]?.rect ?? null) : null,
   );
 
+  const navUrl = navStatus._tag === "Success" ? navStatus.url : null;
+  const { environmentId: threadEnvironmentId, threadId } = threadRef;
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Persist browser navigation reported by the external preview runtime for later session restoration.
+  useEffect(() => {
+    if (requestedTabId && navUrl) {
+      useRightPanelStore
+        .getState()
+        .rememberBrowserUrl(scopeThreadRef(threadEnvironmentId, threadId), requestedTabId, navUrl);
+    }
+  }, [navUrl, requestedTabId, threadEnvironmentId, threadId]);
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Reopen a restored browser surface when its prior server runtime no longer exists.
+  useEffect(() => {
+    if (!lostToRestart || lostTabId === null) return;
+    void reopenBrowserSurface({
+      threadRef: scopeThreadRef(threadEnvironmentId, threadId),
+      tabId: lostTabId,
+      openPreview: open,
+    }).then((result) => {
+      if (result._tag === "Failure") setReopenFailedTabId(lostTabId);
+    });
+  }, [lostTabId, lostToRestart, open, threadEnvironmentId, threadId]);
+
   const navigateToResolvedUrl = async (resolvedUrl: string) => {
+    if (lostTabId !== null) {
+      const result = await reopenBrowserSurface({
+        threadRef,
+        tabId: lostTabId,
+        openPreview: open,
+        url: resolvedUrl,
+      });
+      return result._tag === "Success";
+    }
     if (isServerTab && serverSurfaceRef.current) {
       if (serverInputDisabled) return false;
       serverSurfaceRef.current.navigate(resolvedUrl);
@@ -247,6 +318,7 @@ export function PreviewView({
     if (runtimeTabId && previewBridge) {
       await previewBridge.navigate(runtimeTabId, resolvedUrl);
       rememberPreviewUrl(threadRef, resolvedUrl);
+      focusPreviewPage(runtimeTabId);
       return true;
     }
     const result = await openPreviewSession({ openPreview: open, threadRef, url: resolvedUrl });
@@ -342,6 +414,27 @@ export function PreviewView({
     if (next !== serverZoomFactor) void adjustServerTab({ zoomFactor: next });
   };
 
+  const canFindInPage =
+    previewBridge !== null &&
+    runtimeTabId !== null &&
+    desktopOverlay !== null &&
+    !isServerTab &&
+    !showEmptyState &&
+    !isUnreachable;
+  const handleFind = () => {
+    if (!canFindInPage) {
+      toastManager.add({ type: "info", title: "Find on page isn't available for this page" });
+      return;
+    }
+    setFind((previous) => ({ tabId: runtimeTabId, requestId: (previous?.requestId ?? 0) + 1 }));
+  };
+
+  // Otherwise focus falls to the body and the next find shortcut misses the preview.
+  const closeFind = () => {
+    setFind(null);
+    if (runtimeTabId) focusPreviewPage(runtimeTabId);
+  };
+
   const handleZoomIn = () => {
     if (serverOwnsRendering) stepServerZoom(1);
     else if (previewBridge && runtimeTabId) void previewBridge.zoomIn(runtimeTabId);
@@ -390,6 +483,10 @@ export function PreviewView({
     void localApi.shell.openExternal(url).catch(() => undefined);
   };
 
+  const handleFocusUrl = () => {
+    urlInputRef.current?.focus();
+  };
+
   const moveTarget = alternatePreviewRuntime(
     threadRef.environmentId,
     primaryEnvironmentId,
@@ -430,11 +527,18 @@ export function PreviewView({
   };
 
   const handlePictureInPicture = () => {
-    if (!tabId) return;
+    if (!tabId || !canFloat) return;
     if (miniPlayerTabId === tabId) {
       usePreviewMiniPlayerStore.getState().close(threadRef);
       return;
     }
+    if (isServerTab)
+      handoffServerBrowserFrame(
+        threadRef.environmentId,
+        threadRef.threadId,
+        tabId,
+        serverSurfaceRef.current?.canvas() ?? null,
+      );
     usePreviewMiniPlayerStore.getState().open(threadRef, browserMiniPlayerSource(tabId));
     useRightPanelStore.getState().close(threadRef);
   };
@@ -455,6 +559,7 @@ export function PreviewView({
           ? {
               openDevTools: desktopCall(previewBridge.openDevTools),
               toggleNativePictureInPicture: () => handleNativePictureInPicture(),
+              ...(canFindInPage ? { find: handleFind } : {}),
             }
           : {}),
       }
@@ -478,6 +583,7 @@ export function PreviewView({
               .catch(() => undefined),
           openDevTools: desktopCall(previewBridge.openDevTools),
           toggleNativePictureInPicture: () => handleNativePictureInPicture(),
+          ...(canFindInPage ? { find: handleFind } : {}),
         }
       : null;
 
@@ -559,7 +665,7 @@ export function PreviewView({
                     disabled: pathCopied,
                     onClick: copyPath,
                   },
-                  secondaryActionVariant: "outline",
+                  secondaryActionVariant: "secondary",
                 },
               }),
             );
@@ -575,7 +681,7 @@ export function PreviewView({
                   children: "Copy path",
                   onClick: copyPath,
                 },
-                secondaryActionVariant: "outline",
+                secondaryActionVariant: "secondary",
               },
             }),
           );
@@ -642,7 +748,7 @@ export function PreviewView({
                 secondaryActionProps: {
                   ...revealAction,
                 },
-                secondaryActionVariant: "outline",
+                secondaryActionVariant: "secondary",
               },
             }),
           );
@@ -718,7 +824,7 @@ export function PreviewView({
               secondaryActionProps: {
                 ...revealAction,
               },
-              secondaryActionVariant: "outline",
+              secondaryActionVariant: "secondary",
             },
           }),
         );
@@ -854,11 +960,19 @@ export function PreviewView({
   }, [runtimeTabId]);
 
   // Subscribe only while visible; ChatView always owns URL-aware toggle-panel handling.
+  const paneFocusedRef = useLayoutPaneFocusedRef();
   const onPreviewAction = useEffectEvent(
     (action: Parameters<Parameters<typeof subscribePreviewAction>[0]>[0]) => {
+      if (!paneFocusedRef.current) return;
       switch (action) {
         case "refresh":
           handleRefresh();
+          return;
+        case "back":
+          handleBack();
+          return;
+        case "forward":
+          handleForward();
           return;
         case "focus-url":
           urlInputRef.current?.focus();
@@ -872,17 +986,23 @@ export function PreviewView({
         case "reset-zoom":
           handleResetZoom();
           return;
+        case "find":
+          handleFind();
+          return;
         case "toggle-panel":
           return;
       }
     },
   );
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to preview actions while the view is visible
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to preview and desktop menu actions while the view is visible
   useEffect(() => {
     if (!visible) return;
     const unsubscribeAction = subscribePreviewAction((action) => onPreviewAction(action));
+    // A focused page swallows its own keydowns, so the desktop forwards these
+    // shortcuts from the guest as menu actions instead.
     const unsubscribeMenu = window.desktopBridge?.onMenuAction((action) => {
       if (action === "preview.focusUrl") onPreviewAction("focus-url");
+      if (action === "preview.find") onPreviewAction("find");
     });
     return () => {
       unsubscribeAction();
@@ -921,7 +1041,7 @@ export function PreviewView({
         captureDisabled={!desktopOverlay || isUnreachable}
         recording={recordingRuntimeTabId !== null}
         onPictureInPicture={
-          tabId && (isServerTab || previewBridge) ? handlePictureInPicture : undefined
+          canFloat && tabId && (isServerTab || previewBridge) ? handlePictureInPicture : undefined
         }
         pictureInPicture={miniPlayerTabId === tabId}
         pictureInPictureDisabled={
@@ -955,6 +1075,9 @@ export function PreviewView({
                 ? { move: { label: moveLabel, onMove: () => void handleMoveTab() } }
                 : {})}
               profileName={activeProfileName}
+              findShortcutLabel={shortcutLabelForCommand(keybindings, "preview.find", {
+                context: { previewFocus: true },
+              })}
               zoomFactor={
                 serverOwnsRendering ? serverZoomFactor : (desktopOverlay?.zoomFactor ?? 1)
               }
@@ -991,7 +1114,10 @@ export function PreviewView({
               </div>
             ) : null}
             <div
-              className="absolute inset-x-0 bottom-0"
+              className={cn(
+                "absolute inset-x-0 bottom-0",
+                (showEmptyState || isUnreachable) && "invisible",
+              )}
               style={{ top: viewport._tag !== "fill" ? BROWSER_DEVICE_TOOLBAR_HEIGHT : 0 }}
             >
               <ServerBrowserSurface
@@ -1012,10 +1138,7 @@ export function PreviewView({
                 }
                 onPopup={(popupTabId) => showPreviewPopup(threadRef, popupTabId, "panel")}
                 // Stays connected under the empty state so a URL picked there reaches the page.
-                className={cn(
-                  "absolute inset-0 h-full w-full",
-                  (showEmptyState || isUnreachable) && "invisible",
-                )}
+                className="absolute inset-0 h-full w-full"
               />
             </div>
           </>
@@ -1029,7 +1152,7 @@ export function PreviewView({
             />
           ) : (
             <div className="flex h-full items-center justify-center p-8 text-center">
-              <p className="max-w-sm text-sm text-muted-foreground">
+              <p className="max-w-sm text-body text-muted-foreground">
                 This tab is open in the T3 Code desktop app.
               </p>
             </div>
@@ -1037,12 +1160,12 @@ export function PreviewView({
         ) : null}
         {showEmptyState ? (
           <PreviewEmptyState
-            threadRef={threadRef}
             environmentId={threadRef.environmentId}
             configuredUrls={configuredUrls}
             recentEntries={recentHistoryEntries}
             onRemoveRecent={(url) => removeUrlForThread(threadRef, url)}
             onOpenUrl={(next) => void handleOpenServerUrl(next)}
+            onFocusUrl={handleFocusUrl}
           />
         ) : null}
         {snapshot && desktopOverlay ? (
@@ -1057,6 +1180,14 @@ export function PreviewView({
             tabId={runtimeTabId}
             zoomFactor={layoutZoomFactor}
             controller={controller}
+          />
+        ) : null}
+        {find && canFindInPage && find.tabId === runtimeTabId ? (
+          <PreviewFindBar
+            key={find.tabId}
+            tabId={find.tabId}
+            focusRequestId={find.requestId}
+            onClose={closeFind}
           />
         ) : null}
         {navStatus._tag === "LoadFailed" && navStatus.download ? (
@@ -1075,6 +1206,7 @@ export function PreviewView({
               code={navStatus.code}
               description={navStatus.description}
               onReload={handleRefresh}
+              onOpenInBrowser={localApi ? handleOpenInBrowser : undefined}
               {...(moveTarget === "server"
                 ? { move: { label: moveLabel, onMove: () => void handleMoveTab() } }
                 : {})}

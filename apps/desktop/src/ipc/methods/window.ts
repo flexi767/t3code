@@ -29,6 +29,7 @@ import * as DesktopBackendPool from "../../backend/DesktopBackendPool.ts";
 import * as DesktopLocalEnvironmentAuth from "../../backend/DesktopLocalEnvironmentAuth.ts";
 import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
 import * as DesktopManagedPolicy from "../../app/DesktopManagedPolicy.ts";
+import * as DesktopPrimaryPaste from "../../app/DesktopPrimaryPaste.ts";
 import * as DesktopAppSettings from "../../settings/DesktopAppSettings.ts";
 import * as DesktopWslBackend from "../../wsl/DesktopWslBackend.ts";
 import * as DesktopWslEnvironment from "../../wsl/DesktopWslEnvironment.ts";
@@ -106,6 +107,15 @@ export const getSystemLocale = DesktopIpc.makeSyncIpcMethod({
   }),
 });
 
+export const getPrimaryPasteEnabled = DesktopIpc.makeSyncIpcMethod({
+  channel: IpcChannels.GET_PRIMARY_PASTE_ENABLED_CHANNEL,
+  result: Schema.Boolean,
+  handler: Effect.fn("desktop.ipc.window.getPrimaryPasteEnabled")(function* () {
+    const primaryPaste = yield* DesktopPrimaryPaste.DesktopPrimaryPaste;
+    return primaryPaste.enabled;
+  }),
+});
+
 export const getPreferredSystemLanguages = DesktopIpc.makeSyncIpcMethod({
   channel: IpcChannels.GET_PREFERRED_SYSTEM_LANGUAGES_CHANNEL,
   result: Schema.Array(Schema.String),
@@ -122,6 +132,22 @@ export const getWindowFullscreenState = DesktopIpc.makeSyncIpcMethod({
     const electronWindow = yield* ElectronWindow.ElectronWindow;
     const window = yield* electronWindow.currentMainOrFirst;
     return Option.isSome(window) && window.value.isFullScreen();
+  }),
+});
+
+// macOS traffic lights. The renderer hides them while the sidebar is collapsed
+// when the user opts in; other platforms keep their caption buttons.
+export const setWindowButtonsVisible = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.SET_WINDOW_BUTTONS_VISIBLE_CHANNEL,
+  payload: Schema.Boolean,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.window.setWindowButtonsVisible")(function* (visible, event) {
+    const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    if (environment.platform !== "darwin" || event === undefined) return;
+    const contents = Electron.webContents.fromId(event.sender.id);
+    const window = contents ? Electron.BrowserWindow.fromWebContents(contents) : null;
+    if (!window || window.isDestroyed()) return;
+    window.setWindowButtonVisibility(visible);
   }),
 });
 
@@ -287,6 +313,16 @@ export const setTheme = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.window.setTheme")(function* (theme) {
     const electronTheme = yield* ElectronTheme.ElectronTheme;
     yield* electronTheme.setSource(theme);
+  }),
+});
+
+export const setBlackChrome = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.SET_BLACK_CHROME_CHANNEL,
+  payload: Schema.Boolean,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.window.setBlackChrome")(function* (enabled) {
+    const electronTheme = yield* ElectronTheme.ElectronTheme;
+    yield* electronTheme.setBlackChrome(enabled);
   }),
 });
 

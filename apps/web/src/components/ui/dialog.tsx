@@ -1,9 +1,22 @@
+import { tooltipSafeFinalFocus } from "./focus-return";
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
+import { useRender } from "@base-ui/react/use-render";
 import { XIcon } from "lucide-react";
-import { type ComponentProps, createContext, type ReactNode, use, useState } from "react";
-import { cn } from "~/lib/utils";
-import { Button } from "~/components/ui/button";
 import {
+  type ComponentProps,
+  createContext,
+  type ReactNode,
+  use,
+  useId,
+  useRef,
+  useState,
+} from "react";
+import { cn } from "~/lib/utils";
+import { Button, type ButtonVariant } from "~/components/ui/button";
+import {
+  DIALOG_APP_POPUP_CLASS,
+  DIALOG_APP_PANEL_POPUP_CLASS,
+  DIALOG_APP_PANEL_BACKDROP_CLASS,
   DIALOG_BACKDROP_CLASS,
   DIALOG_MEDIA_BACKDROP_CLASS,
   DIALOG_MEDIA_POPUP_CLASS,
@@ -11,6 +24,9 @@ import {
   DIALOG_POPUP_CLASS,
 } from "~/components/ui/dialog-styles";
 import { ScrollArea } from "~/components/ui/scroll-area";
+import { createPartPresence } from "~/components/ui/part-presence";
+
+const { PartPresenceContext, useParts, usePart } = createPartPresence<"header">();
 
 const ControlledOpenContext = createContext<boolean | undefined>(undefined);
 
@@ -40,6 +56,20 @@ function Dialog<Payload>(props: DialogPrimitive.Root.Props<Payload>) {
   );
 }
 
+function useDialogActionInitialFocus() {
+  const popupRef = useRef<HTMLDivElement>(null);
+  const initialFocus = (openType: string) => {
+    // Match Base UI: touch opens focus the popup to avoid opening the virtual keyboard.
+    if (openType === "touch") return popupRef.current;
+    return (
+      popupRef.current?.querySelector<HTMLElement>(
+        '[data-slot="dialog-action"]:not(:disabled):not([aria-disabled="true"])',
+      ) ?? true
+    );
+  };
+  return { popupRef, initialFocus };
+}
+
 const DialogPortal = DialogPrimitive.Portal;
 
 function DialogTrigger(props: DialogPrimitive.Trigger.Props) {
@@ -54,12 +84,16 @@ function DialogBackdrop({
   className,
   variant = "default",
   ...props
-}: DialogPrimitive.Backdrop.Props & { variant?: "default" | "media" }) {
+}: DialogPrimitive.Backdrop.Props & { variant?: "default" | "media" | "panel" }) {
   return (
     <DialogPrimitive.Backdrop
       forceRender
       className={cn(
-        variant === "media" ? DIALOG_MEDIA_BACKDROP_CLASS : DIALOG_BACKDROP_CLASS,
+        variant === "media"
+          ? DIALOG_MEDIA_BACKDROP_CLASS
+          : variant === "panel"
+            ? DIALOG_APP_PANEL_BACKDROP_CLASS
+            : DIALOG_BACKDROP_CLASS,
         className,
       )}
       data-slot="dialog-backdrop"
@@ -68,11 +102,18 @@ function DialogBackdrop({
   );
 }
 
-function DialogViewport({ className, ...props }: DialogPrimitive.Viewport.Props) {
+function DialogViewport({
+  className,
+  variant = "default",
+  ...props
+}: DialogPrimitive.Viewport.Props & { variant?: "default" | "app" }) {
   return (
     <DialogPrimitive.Viewport
       className={cn(
-        "fixed inset-0 z-50 grid grid-rows-[1fr_auto_1fr] justify-items-center p-4",
+        "fixed inset-0 z-50 grid justify-items-center",
+        variant === "app"
+          ? "grid-rows-1 items-center sm:p-6 sm:pt-(--app-modal-sm-top) lg:p-10"
+          : "grid-rows-[1fr_auto_1fr] p-4",
         className,
       )}
       data-slot="dialog-viewport"
@@ -87,58 +128,107 @@ function DialogPopup({
   showCloseButton = true,
   bottomStickOnMobile = true,
   variant = "default",
+  viewportProps,
+  placement = "center",
+  contentInset = 0,
   ...props
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean;
   bottomStickOnMobile?: boolean;
-  variant?: "default" | "media";
+  variant?: "default" | "media" | "app" | "app-panel";
+  viewportProps?: Omit<DialogPrimitive.Viewport.Props, "className">;
+  placement?: "center" | "content-top";
+  contentInset?: number;
 }) {
+  const [parts, registerPart] = useParts();
+  const defaultId = useId();
+  const popupId = props.id ?? defaultId;
+  const { popupRef, initialFocus } = useDialogActionInitialFocus();
+  const popup = useRender({
+    ref: popupRef,
+    render: (
+      <DialogPrimitive.Popup
+        className={cn(
+          variant === "media"
+            ? DIALOG_MEDIA_POPUP_CLASS
+            : variant === "app-panel"
+              ? DIALOG_APP_PANEL_POPUP_CLASS
+              : variant === "app"
+                ? DIALOG_APP_POPUP_CLASS
+                : DIALOG_POPUP_CLASS,
+          variant === "app" || variant === "app-panel"
+            ? "text-foreground"
+            : "row-start-2 text-popover-foreground",
+          variant === "default" && "max-h-full max-w-lg",
+          bottomStickOnMobile &&
+            variant !== "app" &&
+            variant !== "app-panel" &&
+            DIALOG_MOBILE_SHEET_CLASS,
+          className,
+        )}
+        data-has-header={parts.length > 0 ? "" : undefined}
+        data-slot="dialog-popup"
+        initialFocus={initialFocus}
+        render={renderRetainedPopup}
+        {...props}
+        id={popupId}
+        finalFocus={tooltipSafeFinalFocus(props.finalFocus, popupId)}
+      >
+        <PartPresenceContext value={registerPart}>{children}</PartPresenceContext>
+        {showCloseButton && (
+          <DialogPrimitive.Close
+            aria-label="Close"
+            className="absolute end-2 top-2"
+            render={<Button size="icon" variant="ghost" />}
+          >
+            <XIcon />
+          </DialogPrimitive.Close>
+        )}
+      </DialogPrimitive.Popup>
+    ),
+  });
   return (
     <DialogPortal>
       {/* Media opens from inside other overlays (a composer chip, a popover), so it sits above them. */}
-      <DialogBackdrop className={variant === "media" ? "z-[60]" : undefined} variant={variant} />
+      <DialogBackdrop
+        className={variant === "media" ? "z-[60]" : undefined}
+        variant={variant === "media" ? "media" : variant === "app-panel" ? "panel" : "default"}
+      />
       <DialogViewport
+        variant={variant === "app" || variant === "app-panel" ? "app" : "default"}
+        {...viewportProps}
+        style={{
+          ...viewportProps?.style,
+          ...(placement === "content-top" ? { "--dialog-content-inset": `${contentInset}px` } : {}),
+        }}
         className={cn(
+          placement === "content-top" &&
+            "sm:grid-rows-[0_auto_1fr] sm:pt-[min(23.611dvh,170px)] sm:ps-[calc(var(--dialog-content-inset)+1rem)]",
+          variant === "app-panel" && "max-sm:p-2",
           bottomStickOnMobile && "max-sm:grid-rows-[1fr_auto] max-sm:p-0 max-sm:pt-12",
           variant === "media" &&
             "z-[60] grid-rows-1 place-items-center px-4 pb-6 pt-[calc(var(--native-titlebar-height,0px)+1.5rem)] [-webkit-app-region:no-drag]",
         )}
       >
-        <DialogPrimitive.Popup
-          className={cn(
-            variant === "media" ? DIALOG_MEDIA_POPUP_CLASS : DIALOG_POPUP_CLASS,
-            "row-start-2 text-popover-foreground",
-            variant === "default" && "max-h-full max-w-lg",
-            bottomStickOnMobile && DIALOG_MOBILE_SHEET_CLASS,
-            className,
-          )}
-          data-slot="dialog-popup"
-          render={renderRetainedPopup}
-          {...props}
-        >
-          {children}
-          {showCloseButton && (
-            <DialogPrimitive.Close
-              aria-label="Close"
-              className="absolute end-2 top-2"
-              render={<Button size="icon" variant="ghost" />}
-            >
-              <XIcon />
-            </DialogPrimitive.Close>
-          )}
-        </DialogPrimitive.Popup>
+        {popup}
       </DialogViewport>
     </DialogPortal>
   );
 }
 
+type DialogActionProps = Omit<React.ComponentProps<typeof Button>, "variant"> & {
+  variant?: Exclude<ButtonVariant, `${string}destructive${string}`>;
+};
+
+function DialogAction(props: DialogActionProps) {
+  return <Button data-slot="dialog-action" {...props} />;
+}
+
 function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
+  usePart("header");
   return (
     <div
-      className={cn(
-        "flex flex-col gap-2 p-6 in-[[data-slot=dialog-popup]:has([data-slot=dialog-panel])]:pb-3 max-sm:pb-4",
-        className,
-      )}
+      className={cn("flex flex-col gap-1 px-5 pt-5 pb-4", className)}
       data-slot="dialog-header"
       {...props}
     />
@@ -155,21 +245,30 @@ function DialogFooter({
   return (
     <div
       className={cn(
-        "flex flex-col-reverse gap-2 px-6 sm:flex-row sm:justify-end sm:rounded-b-[calc(var(--radius-2xl)-1px)]",
-        variant === "default" && "border-t bg-muted/72 py-4",
-        variant === "bare" && "py-4",
+        "flex flex-col-reverse gap-2 px-5 pb-4 sm:flex-row sm:justify-end sm:rounded-b-[calc(var(--radius-pane)-1px)]",
         className,
       )}
       data-slot="dialog-footer"
+      data-variant={variant}
       {...props}
     />
   );
 }
 
-function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props) {
+function DialogTitle({
+  className,
+  size = "default",
+  ...props
+}: DialogPrimitive.Title.Props & { size?: "default" | "page" }) {
   return (
     <DialogPrimitive.Title
-      className={cn("wrap-anywhere font-semibold text-xl leading-snug", className)}
+      className={cn(
+        "wrap-anywhere text-strong-foreground",
+        size === "page"
+          ? "text-title"
+          : "text-label [font-size:0.9375rem] font-semibold leading-snug",
+        className,
+      )}
       data-slot="dialog-title"
       {...props}
     />
@@ -179,7 +278,10 @@ function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props) {
 function DialogDescription({ className, ...props }: DialogPrimitive.Description.Props) {
   return (
     <DialogPrimitive.Description
-      className={cn("text-muted-foreground text-sm", className)}
+      className={cn(
+        "text-body sm:[font-size:0.8125rem] leading-[1.45] text-muted-foreground",
+        className,
+      )}
       data-slot="dialog-description"
       {...props}
     />
@@ -195,7 +297,7 @@ function DialogPanel({
     <ScrollArea scrollFade={scrollFade}>
       <div
         className={cn(
-          "space-y-4 p-6 in-[[data-slot=dialog-popup]:has([data-slot=dialog-header])]:pt-1 in-[[data-slot=dialog-popup]:has([data-slot=dialog-footer]:not(.border-t))]:pb-1",
+          "space-y-4 px-5 pt-5 pb-4 in-[[data-slot=dialog-popup][data-has-header]]:pt-0",
           className,
         )}
         data-slot="dialog-panel"
@@ -212,6 +314,8 @@ export {
   DialogTrigger,
   DialogPortal,
   DialogClose,
+  DialogAction,
+  useDialogActionInitialFocus,
   DialogBackdrop,
   DialogBackdrop as DialogOverlay,
   DialogPopup,

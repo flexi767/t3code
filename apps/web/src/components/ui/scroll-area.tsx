@@ -22,6 +22,7 @@ function getVirtualizedScrollFadeClassName({ top, bottom }: { top: boolean; bott
 function ScrollArea({
   className,
   children,
+  orientation = "both",
   scrollFade = false,
   scrollFadePadding = true,
   scrollbarGutter = false,
@@ -31,6 +32,7 @@ function ScrollArea({
   viewportTabIndex,
   ...props
 }: ScrollAreaPrimitive.Root.Props & {
+  orientation?: "both" | "vertical" | "horizontal";
   scrollFade?: boolean;
   scrollFadePadding?: boolean;
   scrollbarGutter?: boolean;
@@ -50,8 +52,15 @@ function ScrollArea({
     >
       <ScrollAreaPrimitive.Viewport
         {...(viewportTabIndex === undefined ? {} : { tabIndex: viewportTabIndex })}
+        style={
+          orientation === "vertical"
+            ? { overflowX: "hidden" }
+            : orientation === "horizontal"
+              ? { overflowY: "hidden" }
+              : undefined
+        }
         className={cn(
-          "h-full max-h-[inherit] overflow-auto overscroll-contain rounded-[inherit] outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background data-has-overflow-x:overscroll-x-contain",
+          "h-full max-h-[inherit] overflow-auto overscroll-contain rounded-[inherit] outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring data-has-overflow-x:overscroll-x-contain",
           chainVerticalScroll && "overscroll-y-auto",
           scrollFade &&
             "mask-t-from-[calc(100%-min(var(--fade-size),var(--scroll-area-overflow-y-start)))] mask-b-from-[calc(100%-min(var(--fade-size),var(--scroll-area-overflow-y-end)))] mask-l-from-[calc(100%-min(var(--fade-size),var(--scroll-area-overflow-x-start)))] mask-r-from-[calc(100%-min(var(--fade-size),var(--scroll-area-overflow-x-end)))] focus-visible:mask-none [--fade-size:1.5rem]",
@@ -67,9 +76,9 @@ function ScrollArea({
       </ScrollAreaPrimitive.Viewport>
       {!hideScrollbars && (
         <>
-          <ScrollBar orientation="vertical" />
-          <ScrollBar orientation="horizontal" />
-          <ScrollAreaPrimitive.Corner data-slot="scroll-area-corner" />
+          {orientation !== "horizontal" && <ScrollBar orientation="vertical" />}
+          {orientation !== "vertical" && <ScrollBar orientation="horizontal" />}
+          {orientation === "both" && <ScrollAreaPrimitive.Corner data-slot="scroll-area-corner" />}
         </>
       )}
     </ScrollAreaPrimitive.Root>

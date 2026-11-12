@@ -32,7 +32,7 @@ import {
   selectHistoryPageFromCursor,
   THREAD_HISTORY_PAGE_POLICY,
 } from "./threadHistoryPaging.ts";
-import { projectTurnItemForWire } from "./WireProjection.ts";
+import { projectTurnItemForWire } from "@t3tools/shared/wireProjection";
 
 vi.mock("@t3tools/shared/threadFindText", { spy: true });
 
@@ -561,6 +561,50 @@ describe("V2 thread find", () => {
         assert.equal(result.totalMatches, 0);
         assert.isNull(result.match);
       }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("finds an async answer that started a later run", () =>
+    Effect.gen(function* () {
+      yield* createProject(projectId);
+      const projection = yield* ProjectionStore.ProjectionStoreV2;
+      const queuedRun = RunId.make("run:queued");
+      const answerRun = RunId.make("run:answer");
+      yield* commit([
+        thread(threadId, projectId),
+        run(),
+        run(threadId, queuedRun, 2),
+        run(threadId, answerRun, 3),
+      ]);
+      const requestId = RuntimeRequestId.make("late");
+      const question: OrchestrationV2TurnItem = {
+        ...item("question", 1, ""),
+        type: "user_input_request",
+        requestId,
+        questions: [],
+        questionAnswer: { requestId, answers: {}, attachmentsByQuestionId: {} },
+      };
+      const items = [
+        question,
+        { ...item("queued", 2, "queued follow-up", "user_message"), runId: queuedRun },
+        { ...item(`async-answer:${requestId}`, 3, "needle", "user_message"), runId: answerRun },
+      ];
+      yield* commit(
+        items.map((payload) => ({
+          id: EventId.make(`${payload.id}:initial`),
+          threadId,
+          occurredAt: at(1),
+          type: "turn-item.updated" as const,
+          payload,
+        })),
+      );
+      const result = yield* projection.searchThread({ threadId, query: "needle" });
+      assert.equal(result.totalMatches, 1);
+      assert.deepEqual(result.match, {
+        entryId: `async-answer:${requestId}`,
+        runId: answerRun,
+        occurrence: 0,
+      });
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect(

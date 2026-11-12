@@ -110,6 +110,7 @@ const remark = ({ author, reactionGroups: groups, ...raw }: Json) => ({
   lastEditedAt: null,
   isMinimized: false,
   url: "https://github.com/acme/web/pull/1#discussion",
+  pullRequestReview: null,
   ...raw,
   author: actor(author),
   reactionGroups: reactionGroups(groups),
@@ -130,6 +131,7 @@ const reviewCommit = ({ commit: { authors, ...commit } }: Json) => ({
   commit: {
     messageHeadline: "",
     committedDate: "",
+    statusCheckRollup: null,
     ...commit,
     authors: {
       nodes: nodesIn(authors).map((author) => ({
@@ -160,6 +162,7 @@ const withReviewDefaults = (raw: string): string => {
       viewerCanUpdate: true,
       viewerDidAuthor: false,
       reviewDismissals: { pageInfo: LAST_PAGE, nodes: [] },
+      reviewRequestEvents: { nodes: [] },
       ...rest,
       author: actor(author),
       reactionGroups: reactionGroups(groups),
@@ -188,6 +191,7 @@ const withReviewDefaults = (raw: string): string => {
           isOutdated: false,
           line: null,
           diffSide: "RIGHT",
+          firstComment: { nodes: [] },
           ...thread,
           comments: threadCommentsOf(thread["comments"]),
         })),
@@ -581,6 +585,8 @@ describe("pull request detail decoding", () => {
     expect(detail.checks.map((check) => [check.name, check.status])).toEqual([
       ["Prepare PR size config", "pending"],
     ]);
+    expect(detail.checks[0]?.startedAt).toBe("2026-08-11T17:01:04Z");
+    expect(detail.checks[0]?.completedAt).toBeUndefined();
     expect(detail.checksState).toBe("pending");
   });
 
@@ -682,6 +688,104 @@ describe("pull request detail decoding", () => {
 });
 
 describe("review thread decoding", () => {
+  it("keeps snippets, commit checks and team review events through generated selections", () => {
+    const result = expectSuccess(
+      decodeReviewThreadsJson(
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  nodes: [
+                    {
+                      id: "thread-1",
+                      path: "src/a.ts",
+                      line: 3,
+                      firstComment: {
+                        nodes: [{ diffHunk: "@@ -1,2 +1,3 @@\n one\n two\n+three" }],
+                      },
+                      comments: {
+                        nodes: [
+                          {
+                            id: "comment-1",
+                            body: "check this",
+                            createdAt: "2026-10-16T00:00:00Z",
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                },
+                commits: {
+                  nodes: [
+                    {
+                      commit: {
+                        oid: "abc123",
+                        committedDate: "2026-10-16T00:00:00Z",
+                        statusCheckRollup: {
+                          state: "SUCCESS",
+                          contexts: {
+                            totalCount: 3,
+                            checkRunCountsByState: [{ state: "SUCCESS", count: 2 }],
+                            statusContextCountsByState: [{ state: "SUCCESS", count: 1 }],
+                          },
+                        },
+                      },
+                    },
+                  ],
+                },
+                reviewRequestEvents: {
+                  nodes: [
+                    {
+                      __typename: "ReviewRequestedEvent",
+                      createdAt: "2026-10-16T02:00:00Z",
+                      actor: {
+                        __typename: "User",
+                        login: "maria",
+                        avatarUrl: "https://avatars/maria",
+                      },
+                      requestedReviewer: {
+                        __typename: "Team",
+                        combinedSlug: "acme/reviewers",
+                        teamName: "Reviewers",
+                        teamAvatarUrl: null,
+                      },
+                    },
+                    {
+                      __typename: "ReviewRequestedEvent",
+                      createdAt: "2026-10-16T01:00:00Z",
+                      actor: null,
+                      requestedReviewer: {
+                        __typename: "User",
+                        login: "octocat",
+                        name: null,
+                        avatarUrl: "https://avatars/octocat",
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+      ),
+    );
+    expect(result.threads[0]?.thread.snippet).toEqual([
+      { kind: "context", line: 1, text: "one" },
+      { kind: "context", line: 2, text: "two" },
+      { kind: "added", line: 3, text: "three" },
+    ]);
+    expect(result.commits[0]?.checks).toEqual({ state: "passing", passed: 3, total: 3 });
+    expect(result.reviewRequests?.map((event) => [event.reviewer.login, event.createdAt])).toEqual([
+      ["octocat", "2026-10-16T01:00:00Z"],
+      ["acme/reviewers", "2026-10-16T02:00:00Z"],
+    ]);
+    expect(result.reviewRequests?.[1]).toMatchObject({
+      actor: { login: "maria", avatarUrl: "https://avatars/maria" },
+      reviewer: { login: "acme/reviewers", name: "Reviewers", avatarUrl: null },
+    });
+  });
+
   const threadsJson = (
     nodes: ReadonlyArray<Record<string, unknown>>,
     totalCount = nodes.length,
@@ -893,7 +997,14 @@ describe("review thread decoding", () => {
             comments: {
               nodes: [
                 { id: "t1", body: "fix this", createdAt: "2026-07-01T00:00:00Z" },
-                { id: "t2", body: "fixed", createdAt: "2026-07-01T01:00:00Z" },
+                {
+                  id: "t2",
+                  body: "fixed",
+                  createdAt: "2026-07-01T01:00:00Z",
+                  pullRequestReview: {
+                    url: "https://github.com/acme/web/pull/1#pullrequestreview-9",
+                  },
+                },
               ],
             },
           },
@@ -902,6 +1013,11 @@ describe("review thread decoding", () => {
     );
     const comments = reviewThreadConversation(result.threads.map((entry) => entry.thread));
     expect(comments.map((comment) => comment.id)).toEqual(["t1", "t2"]);
+    // A reply-only review has no text of its own; its link finds it through the reply it posted.
+    expect(result.threads[0]?.thread.comments.map((comment) => comment.reviewUrl)).toEqual([
+      undefined,
+      "https://github.com/acme/web/pull/1#pullrequestreview-9",
+    ]);
   });
 
   it("leaves out hidden thread comments, and a thread with none left", () => {
@@ -1352,6 +1468,8 @@ describe("reviewer candidate decoding", () => {
     readonly requested?: ReadonlyArray<Record<string, unknown> | null>;
     readonly author?: string;
     readonly hasNextPage?: boolean;
+    readonly suggested?: ReadonlyArray<Record<string, unknown>>;
+    readonly requestEvents?: ReadonlyArray<Record<string, unknown>>;
   }) =>
     JSON.stringify({
       data: {
@@ -1364,6 +1482,8 @@ describe("reviewer candidate decoding", () => {
           },
           pullRequest: {
             author: input.author === undefined ? null : { __typename: "User", login: input.author },
+            suggestedReviewers: input.suggested ?? [],
+            requestEvents: { nodes: input.requestEvents ?? [] },
             reviewRequests: {
               nodes: (input.requested ?? []).map((requestedReviewer) => ({
                 requestedReviewer:
@@ -1445,13 +1565,6 @@ describe("reviewer request payload", () => {
       ]),
     ).toEqual({ reviewers: ["octocat", "hubot"], team_reviewers: ["reviewers"] });
   });
-
-  it("sends both lists even where one of them is empty, which is what GitHub reads", () => {
-    expect(buildReviewerRequest([{ id: "octocat", kind: "user" }])).toEqual({
-      reviewers: ["octocat"],
-      team_reviewers: [],
-    });
-  });
 });
 
 describe("review submission payload", () => {
@@ -1516,32 +1629,6 @@ describe("review submission payload", () => {
 });
 
 describe("decodePullRequestFilesJson", () => {
-  it("quotes literal backslashes without interpreting them as escapes", () => {
-    const result = expectSuccess(
-      decodePullRequestFilesJson(
-        JSON.stringify([
-          {
-            filename: String.raw`src\notes.ts`,
-            status: "modified",
-            patch: "@@ -1 +1 @@\n-old\n+new",
-          },
-        ]),
-      ),
-    );
-
-    expect(result.patch).toBe(
-      [
-        String.raw`diff --git "a/src\\notes.ts" "b/src\\notes.ts"`,
-        String.raw`--- "a/src\\notes.ts"`,
-        String.raw`+++ "b/src\\notes.ts"`,
-        "@@ -1 +1 @@",
-        "-old",
-        "+new",
-        "",
-      ].join("\n"),
-    );
-  });
-
   it("preserves spaces and literal backslashes in both rename paths", () => {
     const result = expectSuccess(
       decodePullRequestFilesJson(

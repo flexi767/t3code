@@ -5,12 +5,39 @@ import * as Hex from "effect/encoding/Hex";
 import { extendTailwindMerge } from "tailwind-merge";
 import { DraftId } from "../composerDraftStore";
 
-// Register extra font sizes and background images so tailwind-merge does not
-// treat text-2xs or bg-composer-seam-below as colors.
 const twMerge = extendTailwindMerge({
   extend: {
-    theme: { text: ["2xs", "3xs", "4xs", "5xs"] },
     classGroups: { "bg-image": [{ bg: ["composer-seam-below", "composer-seam-above"] }] },
+    theme: {
+      radius: [
+        "model-tag",
+        "kbd",
+        "badge",
+        "row",
+        "item",
+        "control",
+        "card",
+        "row-card",
+        "pane",
+        "thread-details",
+        "project-icon",
+      ],
+      shadow: ["dialog", "composer"],
+      text: [
+        "2xs",
+        "3xs",
+        "4xs",
+        "5xs",
+        "title",
+        "prompt",
+        "control",
+        "label",
+        "body",
+        "meta",
+        "caption",
+        "micro",
+      ],
+    },
   },
 });
 

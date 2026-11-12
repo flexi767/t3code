@@ -1,4 +1,9 @@
-import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import {
+  scopedThreadKey,
+  scopeProjectRef,
+  scopeThreadRef,
+} from "@t3tools/client-runtime/environment";
+import type { ScopedThreadRef } from "@t3tools/contracts";
 import type { ClientSettings } from "@t3tools/contracts/settings";
 import { createBrowserHistory, createHashHistory } from "@tanstack/react-router";
 import * as Schema from "effect/Schema";
@@ -22,7 +27,7 @@ import { startSlowRpcRequestToasts } from "./components/SlowRpcRequestToastCoord
 import { startThreadNotifications } from "./components/ThreadNotificationCoordinator";
 import { startGuideRunNotifications } from "./components/pullRequest/guide/PullRequestGuideRunCoordinator";
 import { APP_BASE_NAME, APP_DISPLAY_NAME, APP_STAGE_LABEL } from "./branding";
-import { resolveServerBackedAppDisplayName } from "./branding.logic";
+import { resolveServerBackedAppDisplayName, resolveWindowTitle } from "./branding.logic";
 import { isElectron } from "./env";
 import {
   subscribeComposerDraftModelReconciliation,
@@ -35,8 +40,11 @@ import { readLocalStorageValue, subscribeLocalStorageKey } from "./hooks/useLoca
 import { startHostEnvironmentLookup } from "./state/primaryEnvironment";
 import {
   getClientSettings,
+  getClientSettingsHydratedSnapshot,
+  startLegacyLayoutSettingsMigration,
   startModelPreferencesMigration,
   subscribeClientSettings,
+  subscribeClientSettingsHydration,
 } from "./hooks/useSettings";
 import { syncBrowserChromeTheme } from "./hooks/useTheme";
 import { startThreadVisitedMigration } from "./hooks/useThreadVisitedMigration";
@@ -47,21 +55,25 @@ import {
 } from "./lib/windowControlsOverlay";
 import { startProviderAuthDelivery } from "./providerAuthDelivery";
 import { getRouter, type AppRouter } from "./router";
+import { trackNavigationHistory } from "./navigationHistory";
 import { appAtomRegistry } from "./rpc/atomRegistry";
+import { environmentProjects } from "./state/projects";
 import { primaryServerConfigAtom } from "./state/server";
 import { environmentShell } from "./state/shell";
 import { installChatRouteCommands } from "./shortcuts/chatRouteCommands";
 import { startWorkspaceFocus } from "./lib/workspaceFocus";
+import { startI18n } from "./i18n/runtime";
 import { installCommandPaletteCommands } from "./shortcuts/commandPaletteCommands";
 import { registerOpenFavoriteEditorCommand } from "./components/chat/OpenInPickerShortcut";
 import { environmentThreadShells, threadEnvironment } from "./state/threads";
-import { resolveThreadRouteTarget } from "./threadRoutes";
+import { resolveActiveThreadRouteRef, resolveThreadRouteTarget } from "./threadRoutes";
 
 /** Writes appearance settings onto the document, touching only the groups that changed. */
 function startClientAppearance(): void {
   const root = document.documentElement;
   let applied: ClientSettings | null = null;
   let appliedSeparateFonts: boolean | null = null;
+  let appliedSurfaceStyle: ClientSettings["surfaceStyle"] | null = null;
   const apply = () => {
     const settings = getClientSettings();
     const previous = applied;
@@ -79,16 +91,18 @@ function startClientAppearance(): void {
     if (previous?.chatWidth !== settings.chatWidth) {
       root.dataset.chatWidth = settings.chatWidth;
     }
+    // Keep index.html's stored surface until hydration supplies the saved preference.
+    if (getClientSettingsHydratedSnapshot() && appliedSurfaceStyle !== settings.surfaceStyle) {
+      appliedSurfaceStyle = settings.surfaceStyle;
+      root.dataset.surfaceStyle = settings.surfaceStyle;
+      try {
+        window.localStorage.setItem("t3code:surface-style", settings.surfaceStyle);
+      } catch {
+        // The current page still uses the selected surface without persistence.
+      }
+    }
     if (previous?.appearanceContrast !== settings.appearanceContrast) {
       applyAppearanceContrast(root, settings.appearanceContrast);
-    }
-    if (previous?.glassOpacity !== settings.glassOpacity) {
-      root.style.setProperty("--glass-opacity", `${settings.glassOpacity}%`);
-      if (settings.glassOpacity === 100) {
-        root.style.setProperty("--glass-blur", "0px");
-      } else {
-        root.style.removeProperty("--glass-blur");
-      }
     }
     if (
       previous?.fontFamilySans !== settings.fontFamilySans ||
@@ -114,22 +128,86 @@ function startClientAppearance(): void {
   };
   subscribeClientSettings(apply);
   subscribeLocalStorageKey(TYPOGRAPHY_ADVANCED_STORAGE_KEY, apply);
+  subscribeClientSettingsHydration(apply);
   apply();
 }
 
-function startDocumentTitle(): void {
-  appAtomRegistry.subscribe(
-    primaryServerConfigAtom,
-    (config) => {
-      document.title = resolveServerBackedAppDisplayName({
+function readOpenThreadRef(router: AppRouter): ScopedThreadRef | null {
+  const target = resolveThreadRouteTarget(router.state.matches.at(-1)?.params ?? {});
+  const draft =
+    target?.kind === "draft"
+      ? useComposerDraftStore.getState().getDraftSession(target.draftId)
+      : null;
+  return resolveActiveThreadRouteRef(target, draft);
+}
+
+/** Names the open thread and its project in the window title, or the app when none is open. */
+function startDocumentTitle(router: AppRouter): void {
+  const readOnGuestPage = () => router.state.matches.some((match) => match.routeId === "/guest");
+  let openThreadRef = readOpenThreadRef(router);
+  let onGuestPage = readOnGuestPage();
+  const write = () => {
+    // GuestPage titles the tab after the shared thread.
+    if (onGuestPage) return;
+    const thread =
+      openThreadRef === null
+        ? null
+        : appAtomRegistry.get(environmentThreadShells.quietThreadShellAtom(openThreadRef));
+    const project =
+      thread === null
+        ? null
+        : appAtomRegistry.get(
+            environmentProjects.projectAtom(
+              scopeProjectRef(thread.environmentId, thread.projectId),
+            ),
+          );
+    const title = resolveWindowTitle({
+      appDisplayName: resolveServerBackedAppDisplayName({
         baseName: APP_BASE_NAME,
         fallbackDisplayName: APP_DISPLAY_NAME,
         fallbackStageLabel: APP_STAGE_LABEL,
-        primaryServerVersion: config?.environment.serverVersion ?? null,
-      });
-    },
-    { immediate: true },
-  );
+        primaryServerVersion:
+          appAtomRegistry.get(primaryServerConfigAtom)?.environment.serverVersion ?? null,
+      }),
+      projectTitle: project?.title ?? null,
+      threadTitle: thread?.title ?? null,
+      desktop: isElectron,
+    });
+    // Projects change whenever any project does; most changes leave the title alone.
+    if (document.title !== title) document.title = title;
+  };
+  // The open thread's own shell, since the shell lists skip threads hidden by a tag filter.
+  let unsubscribeOpenThread = () => {};
+  const watchOpenThread = () => {
+    unsubscribeOpenThread();
+    unsubscribeOpenThread =
+      openThreadRef === null
+        ? () => {}
+        : appAtomRegistry.subscribe(
+            environmentThreadShells.quietThreadShellAtom(openThreadRef),
+            write,
+          );
+  };
+  // The draft store changes on every keystroke; only a new open thread matters here.
+  const updateOpenThread = () => {
+    const next = readOpenThreadRef(router);
+    const nextOnGuestPage = readOnGuestPage();
+    if (
+      nextOnGuestPage === onGuestPage &&
+      (next && scopedThreadKey(next)) === (openThreadRef && scopedThreadKey(openThreadRef))
+    ) {
+      return;
+    }
+    openThreadRef = next;
+    onGuestPage = nextOnGuestPage;
+    watchOpenThread();
+    write();
+  };
+  watchOpenThread();
+  appAtomRegistry.subscribe(primaryServerConfigAtom, write, { immediate: true });
+  appAtomRegistry.subscribe(environmentProjects.projectsAtom, write);
+  router.subscribe("onResolved", updateOpenThread);
+  useComposerDraftStore.subscribe(updateOpenThread);
 }
 
 /**
@@ -141,6 +219,7 @@ function startBrowserChromeThemeSync(router: AppRouter): void {
   const resync = () => window.requestAnimationFrame(syncBrowserChromeTheme);
   router.subscribe("onRendered", resync);
   router.subscribe("onResolved", resync);
+  window.matchMedia("(max-width: 767px)").addEventListener("change", resync);
 }
 
 /** Chat overlays belong to the thread they were opened in, so leaving its route drops them. */
@@ -171,21 +250,26 @@ export function startAppServices(): AppRouter {
 
   // Electron loads the app from a file-backed shell, so hash history avoids path resolution issues.
   const router = getRouter(isElectron ? createHashHistory() : createBrowserHistory());
+  trackNavigationHistory(router.history);
 
   if (isElectron) {
     syncDocumentElectronPlatformClasses(navigator.platform);
     syncDocumentWindowControlsOverlayClass();
+    // A reload keeps the window, including traffic lights hidden by the collapsed sidebar.
+    void window.desktopBridge?.setWindowButtonsVisible?.(true);
   }
 
   installDesktopPasteAsText(window.desktopBridge, window);
 
   startClientAppearance();
-  startDocumentTitle();
+  startI18n();
+  startDocumentTitle(router);
   startHostEnvironmentLookup();
   startEnvironmentThemeRepaint();
   startBrowserChromeThemeSync(router);
   startDefaultThemeAdoption();
   startModelPreferencesMigration();
+  startLegacyLayoutSettingsMigration();
   startAgentOpenedPreviews();
   if (isElectron) startElectronBrowserHost();
   startPreviewTitleRecording();

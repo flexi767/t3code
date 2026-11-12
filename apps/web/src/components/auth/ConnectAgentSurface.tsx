@@ -8,7 +8,6 @@ import {
   managedRuntimeModeCeilingMessage,
   parseMcpApprovalCode,
 } from "@t3tools/contracts";
-import { Radio as RadioPrimitive } from "@base-ui/react/radio";
 import { isLoopbackHost } from "@t3tools/shared/preview";
 import { EyeIcon, type LucideIcon } from "lucide-react";
 import type * as Context from "effect/Context";
@@ -18,7 +17,6 @@ import { type ReactNode, useEffect, useState } from "react";
 
 import { PrimaryEnvironmentHttpClient } from "~/environments/primary/httpClient";
 import { runPrimaryHttp } from "~/lib/runtime";
-import { cn } from "~/lib/utils";
 import {
   agentRedirectUrl,
   resolveApprovalDecision,
@@ -28,7 +26,7 @@ import { runtimeModeConfig } from "../chat/runtimeModeConfig";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { RadioGroup } from "../ui/radio-group";
+import { Radio, RadioGroup } from "../ui/radio-group";
 import { Spinner } from "../ui/spinner";
 import { StandalonePage, StandalonePageHeader } from "../ui/standalone-page";
 
@@ -236,7 +234,7 @@ export function McpConsent({
     return (
       <StandalonePage>
         <ConnectAgentHeading title="This sign-in cannot continue" description={loaded.message} />
-        <p className="mt-4 text-sm text-muted-foreground">
+        <p className="mt-4 text-body text-muted-foreground">
           Close this page and start the sign-in again from your agent.
         </p>
         {footer}
@@ -261,35 +259,37 @@ export function McpConsent({
         description={
           <>
             This agent wants to use the threads in every project on{" "}
-            <span className="font-medium text-foreground">
+            <span className="text-label text-foreground">
               {environmentLabel ?? details.environmentHost}
             </span>
             {environmentLabel ? ` (${details.environmentHost})` : null}.
           </>
         }
       />
-      <dl className="mt-4 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-sm">
+      <dl className="mt-4 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-body">
         <dt className="text-muted-foreground">App</dt>
         <dd className="min-w-0 break-words">
-          {details.clientName} <span className="text-muted-foreground">· name set by the app</span>
+          {details.clientName} <span className="text-muted-foreground">(name set by the app)</span>
         </dd>
         <dt className="text-muted-foreground">Access goes to</dt>
-        <dd className="min-w-0 break-words font-medium">
+        <dd className="min-w-0 break-words text-label">
           {details.redirectHost}
           {redirectsToThisComputer(details.redirectHost) ? (
-            <span className="font-normal text-muted-foreground">
+            <span className="text-body text-muted-foreground">
               {" "}
               on the computer that opened this page
             </span>
           ) : (
-            <span className="font-normal text-muted-foreground">
+            <span className="text-body text-muted-foreground">
               {" "}
-              · whoever runs it gets this access
+              (whoever runs it gets this access)
             </span>
           )}
         </dd>
       </dl>
-      <p className="mt-2 text-xs text-muted-foreground">Only approve a sign-in you just started.</p>
+      <p className="mt-2 text-meta text-muted-foreground">
+        Only approve a sign-in you just started.
+      </p>
 
       <form
         className="mt-6 space-y-5"
@@ -300,7 +300,7 @@ export function McpConsent({
       >
         {acceptsCode ? (
           <div className="space-y-2">
-            <label className="text-sm font-medium" htmlFor="connect-agent-pairing-code">
+            <label className="text-label" htmlFor="connect-agent-pairing-code">
               Sign-in code
             </label>
             <Input
@@ -315,7 +315,7 @@ export function McpConsent({
               spellCheck={false}
               value={pairingCode}
             />
-            <p className="text-xs text-muted-foreground">
+            <p className="text-meta text-muted-foreground">
               Get one from Use T3 Code in another app (MCP), Settings → Sharing & access, or{" "}
               <code>t3 auth pairing create</code> on this machine.
             </p>
@@ -323,13 +323,13 @@ export function McpConsent({
         ) : null}
 
         {codeAccess ? (
-          <p className="text-sm">
+          <p className="text-body">
             <span className="text-muted-foreground">Access</span>{" "}
-            <span className="font-medium">{accessConfig[codeAccess].label}</span>
+            <span className="text-label">{accessConfig[codeAccess].label}</span>
           </p>
         ) : (
           <div className="space-y-2">
-            <span id="connect-agent-access-label" className="text-sm font-medium">
+            <span id="connect-agent-access-label" className="text-label">
               What it may do
             </span>
             <RadioGroup
@@ -341,12 +341,11 @@ export function McpConsent({
                 <AccessOption
                   key={option}
                   access={option}
-                  selected={option === access}
                   disabledReason={ceilingReason(details, option)}
                 />
               ))}
             </RadioGroup>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-meta text-muted-foreground">
               Beyond read only, it can start, message and stop threads, and none of them can run
               with more than the mode you pick.
             </p>
@@ -359,7 +358,7 @@ export function McpConsent({
           </Alert>
         ) : null}
 
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap justify-end gap-2">
           <Button disabled={!canApprove} type="submit">
             {pending === "approve"
               ? "Approving…"
@@ -371,7 +370,7 @@ export function McpConsent({
             disabled={pending !== null}
             onClick={() => void decide("deny", details)}
             type="button"
-            variant="outline"
+            variant="secondary"
           >
             {pending === "deny" ? "Denying…" : "Deny"}
           </Button>
@@ -389,7 +388,7 @@ function ConnectAgentHeading({
   readonly title: string;
   readonly description: ReactNode;
 }) {
-  return <StandalonePageHeader context="Agent sign-in" title={title} description={description} />;
+  return <StandalonePageHeader title={title} description={description} />;
 }
 
 /** Why a managed policy keeps `access` from being granted, or undefined when it may be. */
@@ -405,12 +404,10 @@ function ceilingReason(details: AuthMcpApprovalDetails, access: AuthMcpClientAcc
 /** One access level in a radio group; `description` replaces the level's own, null hides it. */
 export function AccessOption({
   access,
-  selected,
   disabledReason,
   description,
 }: {
   readonly access: AuthMcpClientAccess;
-  readonly selected: boolean;
   readonly disabledReason: string | undefined;
   readonly description?: string | null;
 }) {
@@ -418,30 +415,15 @@ export function AccessOption({
   const detail =
     disabledReason ?? (description === undefined ? accessConfig[access].description : description);
   return (
-    <RadioPrimitive.Root
-      value={access}
-      disabled={disabledReason !== undefined}
-      className={cn(
-        "flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 text-left outline-none transition-[background-color,border-color,box-shadow]",
-        "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
-        selected
-          ? "border-primary bg-background ring-2 ring-inset ring-primary/25 dark:border-transparent dark:bg-primary/10 dark:ring-1 dark:ring-primary/30"
-          : "border-border bg-background hover:bg-muted/50 dark:border-transparent dark:bg-white/[0.035] dark:hover:bg-accent",
-      )}
-    >
-      <Icon
-        aria-hidden
-        className={cn(
-          "mt-0.5 size-4 shrink-0",
-          selected ? "text-primary" : "text-muted-foreground",
-        )}
-      />
+    <label className="flex cursor-pointer items-start gap-3 rounded-control surface-well px-3 py-3 has-data-disabled:cursor-not-allowed has-data-disabled:opacity-64">
+      <Radio value={access} disabled={disabledReason !== undefined} />
+      <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
       <span className="min-w-0">
-        <span className="block text-sm font-medium text-foreground">{label}</span>
+        <span className="block text-label text-foreground">{label}</span>
         {detail === null ? null : (
-          <span className="block text-xs text-muted-foreground">{detail}</span>
+          <span className="block text-meta text-muted-foreground">{detail}</span>
         )}
       </span>
-    </RadioPrimitive.Root>
+    </label>
   );
 }

@@ -1,6 +1,13 @@
 import { useAtomValue } from "@effect/atom-react";
 import { AuthSettingsWriteScope, type EnvironmentId, sessionGrantsScope } from "@t3tools/contracts";
-import { ChevronDownIcon, PlusIcon, RotateCcwIcon, XIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  PlusIcon,
+  RotateCcwIcon,
+  ServerIcon,
+  Undo2Icon,
+  XIcon,
+} from "lucide-react";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { useRef, useState } from "react";
 
@@ -158,6 +165,8 @@ export function UsagePriceOverrides({
   ];
   const stagedDrafts = drafts.filter((draft) => !isEmptyUsagePriceDraft(draft));
   const errors = usagePriceTableErrors(selected, stagedDrafts);
+  // New rows still block Save, but show a price error only once a price or mapping is typed.
+  const awaitingPrice = new Set<string>();
   for (const draft of stagedDrafts) {
     if (!draft.isNew) continue;
     if (draft.model.trim() === "") errors.set(draft.id, "Enter a model ID.");
@@ -167,6 +176,11 @@ export function UsagePriceOverrides({
         drafts.some((other) => other.id !== draft.id && other.model.trim() === draft.model.trim()))
     )
       errors.set(draft.id, "This model already has a row. Edit its prices there.");
+    else if (
+      (draft.alias ?? "").trim() === "" &&
+      Object.values(draft.values).every((value) => value.trim() === "")
+    )
+      awaitingPrice.add(draft.id);
   }
   const failedDestinations =
     attempt?.destinations.filter(
@@ -288,14 +302,20 @@ export function UsagePriceOverrides({
               </Label>
               <Menu>
                 <MenuTrigger
-                  render={<Button variant="outline" size="sm" className="min-w-0" />}
+                  render={
+                    <Button variant="secondary" size="sm" className="w-50 max-w-full min-w-0" />
+                  }
                   aria-labelledby="usage-prices-apply-label usage-prices-selection"
                   disabled={pending || hasChanges}
                 >
-                  <span id="usage-prices-selection" className="truncate">
+                  <ServerIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                  <span id="usage-prices-selection" className="min-w-0 flex-1 truncate text-start">
                     {selectionLabel}
                   </span>
-                  <ChevronDownIcon className="size-3.5 shrink-0" aria-hidden />
+                  <ChevronDownIcon
+                    className="size-3.5 shrink-0 text-muted-foreground"
+                    aria-hidden
+                  />
                 </MenuTrigger>
                 <MenuPopup align="start">
                   <MenuCheckboxItem
@@ -390,6 +410,7 @@ export function UsagePriceOverrides({
                       rows.map((row) => {
                         const aliasCell = usageAliasCell(selected, row.model);
                         const alias = (row.alias ?? aliasCell.value).trim();
+                        const error = awaitingPrice.has(row.id) ? undefined : errors.get(row.id);
                         return (
                           <TableRow key={row.id} data-row-id={row.id}>
                             <TableCell className="whitespace-normal">
@@ -405,7 +426,7 @@ export function UsagePriceOverrides({
                                   }}
                                   aria-label="New model ID"
                                   aria-invalid={
-                                    (row.model.trim() !== "" && errors.has(row.id)) || undefined
+                                    (row.model.trim() !== "" && error !== undefined) || undefined
                                   }
                                   list="usage-price-models"
                                   placeholder="Model ID"
@@ -419,18 +440,18 @@ export function UsagePriceOverrides({
                               ) : (
                                 <span
                                   className={cn(
-                                    "block break-all",
-                                    row.removed && "text-muted-foreground line-through",
+                                    "block font-mono break-all",
+                                    row.removed && "text-dim-foreground",
                                   )}
                                 >
                                   {row.model}
                                 </span>
                               )}
-                              {errors.has(row.id) &&
+                              {error !== undefined &&
                               (row.model.trim() !== "" ||
                                 Object.values(row.values).some((value) => value !== "")) ? (
                                 <p role="alert" className="mt-1 text-xs text-destructive">
-                                  {errors.get(row.id)}
+                                  {error}
                                 </p>
                               ) : null}
                             </TableCell>
@@ -516,6 +537,8 @@ export function UsagePriceOverrides({
                                 >
                                   {row.isNew ? (
                                     <XIcon aria-hidden />
+                                  ) : row.removed ? (
+                                    <Undo2Icon aria-hidden />
                                   ) : (
                                     <RotateCcwIcon aria-hidden />
                                   )}
@@ -577,11 +600,16 @@ export function UsagePriceOverrides({
                           : "text-muted-foreground"
                       }
                     >
-                      {result?.status === "failed"
-                        ? `Not saved · ${result.error}`
-                        : result?.status === "saved"
-                          ? "Saved"
-                          : "Saving…"}
+                      {result?.status === "failed" ? (
+                        <>
+                          <span className="block">Not saved</span>
+                          <span className="block">{result.error}</span>
+                        </>
+                      ) : result?.status === "saved" ? (
+                        "Saved"
+                      ) : (
+                        "Saving…"
+                      )}
                     </span>
                   </div>
                 );
@@ -595,7 +623,7 @@ export function UsagePriceOverrides({
           </span>
           <div className="flex w-full flex-wrap justify-end gap-2 sm:w-auto">
             {hasChanges ? (
-              <Button variant="ghost" disabled={pending} onClick={discard}>
+              <Button variant="secondary" disabled={pending} onClick={discard}>
                 {failedDestinations.length > 0 ? "Discard pending changes" : "Discard changes"}
               </Button>
             ) : null}

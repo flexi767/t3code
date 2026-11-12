@@ -11,6 +11,7 @@ import {
 
 import { cn } from "~/lib/utils";
 import { useNativeTitlebarHeight } from "~/lib/windowControlsOverlay";
+import { isReturningFocus } from "./focus-return";
 
 // Base UI's default, restated because a padding object zeroes the sides it omits.
 const COLLISION_PADDING = 5;
@@ -20,7 +21,8 @@ const TooltipProvider = TooltipPrimitive.Provider;
 type TooltipActionsRef = RefObject<TooltipPrimitive.Root.Actions | null>;
 
 // The compiler freezes context values; update hovered tooltips through calls instead of shared ref writes.
-function createTooltipHoverTracker() {
+function createTooltipHoverTracker(suppressHoverWhileScrolling: boolean) {
+  let lastScrollAt = Number.NEGATIVE_INFINITY;
   let hovered: { trigger: HTMLElement; actionsRef: TooltipActionsRef } | null = null;
   return {
     hover(trigger: HTMLElement, actionsRef: TooltipActionsRef) {
@@ -29,9 +31,15 @@ function createTooltipHoverTracker() {
     release(actionsRef: TooltipActionsRef) {
       if (hovered?.actionsRef === actionsRef) hovered = null;
     },
+    suppressHover() {
+      return suppressHoverWhileScrolling && Date.now() - lastScrollAt < 150;
+    },
     dismissUnfocused() {
+      lastScrollAt = Date.now();
       const tooltip = hovered;
-      if (!tooltip || tooltip.trigger.contains(tooltip.trigger.ownerDocument.activeElement)) {
+      if (!tooltip) return;
+      const focused = tooltip.trigger.ownerDocument.activeElement;
+      if (focused && tooltip.trigger.contains(focused) && focused.matches(":focus-visible")) {
         return;
       }
       hovered = null;
@@ -45,8 +53,12 @@ type TooltipHoverTracker = ReturnType<typeof createTooltipHoverTracker>;
 const TooltipHoverContext = createContext<TooltipActionsRef | null>(null);
 const TooltipScrollContext = createContext<TooltipHoverTracker | null>(null);
 
-function TooltipScrollDismissArea({ onScrollCapture, ...props }: ComponentProps<"div">) {
-  const [tracker] = useState(createTooltipHoverTracker);
+function TooltipScrollDismissArea({
+  onScrollCapture,
+  suppressHoverWhileScrolling = false,
+  ...props
+}: ComponentProps<"div"> & { suppressHoverWhileScrolling?: boolean }) {
+  const [tracker] = useState(() => createTooltipHoverTracker(suppressHoverWhileScrolling));
   return (
     <TooltipScrollContext value={tracker}>
       <div
@@ -74,6 +86,9 @@ function Tooltip<Payload>(props: TooltipPrimitive.Root.Props<Payload>) {
         {...props}
         actionsRef={actionsRef}
         onOpenChange={(open, details) => {
+          if (open && details.reason === "trigger-hover" && tracker.suppressHover()) {
+            details.cancel();
+          }
           props.onOpenChange?.(open, details);
           if (!open && !details.isCanceled) tracker.release(actionsRef);
         }}
@@ -82,16 +97,23 @@ function Tooltip<Payload>(props: TooltipPrimitive.Root.Props<Payload>) {
   );
 }
 
-function TooltipTrigger(props: TooltipPrimitive.Trigger.Props) {
+function TooltipTrigger({ onFocus, ...props }: TooltipPrimitive.Trigger.Props) {
+  const handleFocus: TooltipPrimitive.Trigger.Props["onFocus"] = (event) => {
+    onFocus?.(event);
+    if (isReturningFocus(event.currentTarget.ownerDocument)) event.preventBaseUIHandler();
+  };
   const tracker = use(TooltipScrollContext);
   const actionsRef = use(TooltipHoverContext);
   if (!tracker || !actionsRef) {
-    return <TooltipPrimitive.Trigger data-slot="tooltip-trigger" {...props} />;
+    return (
+      <TooltipPrimitive.Trigger data-slot="tooltip-trigger" {...props} onFocus={handleFocus} />
+    );
   }
   return (
     <TooltipPrimitive.Trigger
       data-slot="tooltip-trigger"
       {...props}
+      onFocus={handleFocus}
       onMouseEnter={(event) => {
         props.onMouseEnter?.(event);
         tracker.hover(event.currentTarget, actionsRef);
@@ -104,7 +126,7 @@ function TooltipPositioner(props: TooltipPrimitive.Positioner.Props) {
   const titlebarHeight = useNativeTitlebarHeight();
   return (
     <TooltipPrimitive.Positioner
-      className="pointer-events-none z-[140] max-w-(--available-width) transition-[top,left,right,bottom,transform] data-instant:transition-none"
+      className="pointer-events-none z-[140] max-w-(--available-width) transition-[top,left,right,bottom,transform] data-instant:transition-none motion-reduce:transition-none"
       collisionPadding={{
         top: COLLISION_PADDING + titlebarHeight,
         right: COLLISION_PADDING,
@@ -130,7 +152,9 @@ function TooltipPopup({
   align?: TooltipPrimitive.Positioner.Props["align"];
   side?: TooltipPrimitive.Positioner.Props["side"];
   sideOffset?: TooltipPrimitive.Positioner.Props["sideOffset"];
-  variant?: "default" | "glass" | "code";
+  /** `code` renders monospace content that breaks anywhere, for paths and commands.
+   * A Kbd inside uses the tooltip's contextual keycap colors. */
+  variant?: "default" | "popover" | "code" | "thread";
   anchor?: TooltipPrimitive.Positioner.Props["anchor"];
 }) {
   return (
@@ -138,19 +162,25 @@ function TooltipPopup({
       <TooltipPositioner align={align} anchor={anchor} side={side} sideOffset={sideOffset}>
         <TooltipPrimitive.Popup
           className={cn(
-            "relative flex origin-(--transform-origin) text-balance rounded-md text-popover-foreground text-xs transition-[scale,opacity] before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-md)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0 data-instant:duration-0 dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
-            variant === "glass"
-              ? "dropdown-glass shadow-xl shadow-black/25 before:hidden"
-              : "border bg-popover not-dark:bg-clip-padding shadow-md/5",
+            "kbd-in-popover relative flex origin-(--transform-origin) text-balance rounded-item font-normal text-popover-foreground text-xs transition-[scale,opacity] data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0 data-instant:duration-0 motion-reduce:transition-none",
+            // popover floats over media with the popover recipe.
+            variant === "popover" || variant === "thread" ? "surface-popover" : "surface-tooltip",
+            variant === "thread" && "rounded-card",
+            // One wrap width for prose on a 16px line, so a one-line tooltip is a whole 26px;
+            // code dumps get more room and break anywhere.
             variant === "code"
-              ? "max-w-120 wrap-anywhere text-left font-mono text-[11px] leading-relaxed"
-              : "max-w-80 wrap-anywhere whitespace-normal leading-snug",
+              ? "max-w-120 wrap-anywhere text-left font-mono text-caption leading-relaxed"
+              : "max-w-80 wrap-anywhere whitespace-normal leading-4",
             className,
           )}
           data-slot="tooltip-popup"
+          data-variant={variant}
           {...props}
         >
-          <div className="min-w-0 px-2 py-1" data-slot="tooltip-viewport">
+          <div
+            className="min-w-0 px-2 py-1 in-data-[variant=thread]:p-3"
+            data-slot="tooltip-viewport"
+          >
             {children}
           </div>
         </TooltipPrimitive.Popup>

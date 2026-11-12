@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState, type ComponentProps, type CSSProperties } from "react";
 import { useStore } from "zustand";
-import { ChatCanvasContext } from "./ChatCanvasContext";
+import { ChatCanvasContext, ChatCanvasTimelineContext } from "./ChatCanvasContext";
 import type { ChatCanvasPreview } from "./chatCanvasLayout";
 import { resolveChatCanvasModel, type ChatCanvasStore } from "./canvasStore";
 import { selectThreadPanelOpen, useRightPanelStore } from "../../rightPanelStore";
@@ -103,7 +103,6 @@ export function ChatCanvas({
     lane: model.lane,
     layout: model.layout,
     previewKey: preview?.key ?? null,
-    registerTimeline,
     measureDetailsCard: store.getState().measureDetailsCard,
     detailsCardTopInset: model.detailsCardTopInset,
     preferredDetailsCard: model.preferredDetailsCard,
@@ -112,59 +111,61 @@ export function ChatCanvas({
   const { layout } = context;
   return (
     <ChatCanvasContext value={context}>
-      <div
-        {...props}
-        ref={elementRef}
-        data-chat-canvas
-        data-preview-overlaps-chat={layout.overlapsChat || undefined}
-        className="relative flex min-h-0 min-w-0 flex-1 flex-col"
-        style={
-          {
-            "--chat-timeline-gutter": `${measurements.timelineGutter}px`,
-            "--resizable-width": `${resize.width}px`,
-            "--chat-content-max-width": "calc(var(--resizable-width) * 2)",
-            "--chat-lane-inset-start": `${layout.chat.insetStart}px`,
-            "--chat-lane-inset-end": `${layout.chat.insetEnd}px`,
-          } as CSSProperties
-        }
-      >
+      <ChatCanvasTimelineContext value={registerTimeline}>
         <div
-          ref={widthProbeRef}
-          aria-hidden
-          className="pointer-events-none invisible absolute h-0 w-(--chat-content-max-width) min-w-[40rem] box-content ps-3 sm:ps-12"
-        />
-        {children}
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <div
-                role="separator"
-                aria-label="Resize conversation"
-                aria-orientation="vertical"
-                aria-valuemin={640}
-                aria-valuemax={maxHalfWidth * 2}
-                aria-valuenow={resize.width * 2}
-                tabIndex={0}
-                className="group absolute inset-y-0 z-20 hidden w-2 -translate-x-1/2 cursor-col-resize touch-none select-none sm:block pointer-coarse:hidden"
-                style={{ left: layout.chat.left + layout.chat.width }}
-                {...resize.handlers}
-                onKeyDown={(event) => {
-                  if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-                    event.preventDefault();
-                    resize.setWidth(resize.width + (event.key === "ArrowLeft" ? -10 : 10));
-                  }
-                }}
+          {...props}
+          ref={elementRef}
+          data-chat-canvas
+          data-preview-overlaps-chat={layout.overlapsChat || undefined}
+          className="relative flex min-h-0 min-w-0 flex-1 flex-col"
+          style={
+            {
+              "--chat-timeline-gutter": `${measurements.timelineGutter}px`,
+              "--resizable-width": `${resize.width}px`,
+              "--chat-content-max-width": "calc(var(--resizable-width) * 2)",
+              "--chat-lane-inset-start": `${layout.chat.insetStart}px`,
+              "--chat-lane-inset-end": `${layout.chat.insetEnd}px`,
+            } as CSSProperties
+          }
+        >
+          <div
+            ref={widthProbeRef}
+            aria-hidden
+            className="pointer-events-none invisible absolute h-0 w-(--chat-content-max-width) min-w-[40rem] box-content ps-3 sm:ps-12"
+          />
+          {children}
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <div
+                  role="separator"
+                  aria-label="Resize conversation"
+                  aria-orientation="vertical"
+                  aria-valuemin={640}
+                  aria-valuemax={maxHalfWidth * 2}
+                  aria-valuenow={resize.width * 2}
+                  tabIndex={0}
+                  className="group absolute inset-y-0 z-20 hidden w-2 -translate-x-1/2 cursor-col-resize touch-none select-none sm:block pointer-coarse:hidden"
+                  style={{ left: layout.chat.left + layout.chat.width }}
+                  {...resize.handlers}
+                  onKeyDown={(event) => {
+                    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+                      event.preventDefault();
+                      resize.setWidth(resize.width + (event.key === "ArrowLeft" ? -10 : 10));
+                    }
+                  }}
+                />
+              }
+            >
+              <span
+                aria-hidden
+                className="pointer-events-none absolute inset-y-0 left-1/2 w-px bg-transparent group-hover:bg-border group-focus-visible:bg-primary/60 group-active:bg-primary/60"
               />
-            }
-          >
-            <span
-              aria-hidden
-              className="pointer-events-none absolute inset-y-0 left-1/2 w-px bg-transparent group-hover:bg-border group-focus-visible:bg-primary/60 group-active:bg-primary/60"
-            />
-          </TooltipTrigger>
-          <TooltipPopup>Drag to resize conversation</TooltipPopup>
-        </Tooltip>
-      </div>
+            </TooltipTrigger>
+            <TooltipPopup>Drag to resize conversation</TooltipPopup>
+          </Tooltip>
+        </div>
+      </ChatCanvasTimelineContext>
     </ChatCanvasContext>
   );
 }

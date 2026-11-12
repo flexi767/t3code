@@ -141,6 +141,8 @@ const INSTALL_LOCK_RETRY_DELAY = "100 millis";
 // Legacy locks have no owner; allow both ten-minute download stages and the install tail.
 const INSTALL_LOCK_LEGACY_STALE_MS = 30 * 60 * 1_000;
 const VERSION_PROBE_TIMEOUT = "10 seconds";
+// Antivirus scans can hold the first launch of a freshly downloaded binary for 20-30 s.
+const INSTALL_VALIDATION_TIMEOUT = "2 minutes";
 
 const ACTIVATE_RETRY_COUNT = 40;
 const ACTIVATE_RETRY_DELAY = "250 millis";
@@ -159,6 +161,14 @@ const trimmedString = (name: string) =>
 const CloudflaredConfig = Config.all({
   executableOverride: trimmedString(CLOUDFLARED_PATH_ENV_NAME),
 });
+
+type InstallStageReporter = (
+  stage: RelayClientInstallProgressStage,
+  facts?: {
+    readonly downloadedBytes?: number;
+    readonly checksumVerified?: boolean;
+  },
+) => Effect.Effect<void>;
 
 export interface CloudflaredRelayClientOptions {
   readonly baseDir: string;
@@ -299,19 +309,23 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
     return platform === "win32" || (info.value.mode & 0o111) !== 0;
   });
 
+  const runVersionProbe = Effect.fn("cloudflared.runVersionProbe")(function* (
+    executablePath: string,
+    timeout: Duration.Input,
+  ) {
+    return yield* spawner
+      .string(ChildProcess.make(executablePath, ["version"], { stdin: "ignore", stderr: "ignore" }))
+      .pipe(
+        Effect.map(parseCloudflaredVersionOutput),
+        Effect.timeoutOption(timeout),
+        Effect.map(Option.getOrNull),
+        Effect.orElseSucceed(() => null),
+      );
+  });
+
   // Cache successful version probes per file revision; do not let transient failures hide valid binaries.
   const versionCache = yield* Cache.makeWith(
-    (key: VersionProbeKey) =>
-      spawner
-        .string(
-          ChildProcess.make(key.executablePath, ["version"], { stdin: "ignore", stderr: "ignore" }),
-        )
-        .pipe(
-          Effect.map(parseCloudflaredVersionOutput),
-          Effect.timeoutOption(VERSION_PROBE_TIMEOUT),
-          Effect.map(Option.getOrNull),
-          Effect.orElseSucceed(() => null),
-        ),
+    (key: VersionProbeKey) => runVersionProbe(key.executablePath, VERSION_PROBE_TIMEOUT),
     {
       capacity: 16,
       timeToLive: (exit) =>
@@ -456,7 +470,7 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
 
   const downloadAsset = Effect.fn("cloudflared.downloadAsset")(function* (
     asset: CloudflaredReleaseAsset,
-    report: (stage: RelayClientInstallProgressStage) => Effect.Effect<void>,
+    report: InstallStageReporter,
   ) {
     yield* report("downloading");
     const response = yield* httpClient.execute(HttpClientRequest.get(asset.url)).pipe(
@@ -484,7 +498,7 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
         ),
       ),
     );
-    yield* report("verifying");
+    yield* report("verifying", { downloadedBytes: bytes.byteLength });
     const checksum = yield* digest.digest(Digest.sha256, bytes).pipe(
       Effect.mapError(
         (cause) =>
@@ -576,7 +590,7 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
   });
 
   const installUnlocked = Effect.fn("cloudflared.installUnlocked")(function* (
-    report: (stage: RelayClientInstallProgressStage) => Effect.Effect<void>,
+    report: InstallStageReporter,
   ) {
     yield* report("checking");
     const config = yield* loadCloudflaredConfig;
@@ -630,7 +644,7 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
         releaseAsset.archive === "tgz" ? "cloudflared.tgz" : executableFileName(platform),
       );
       const download = yield* downloadAsset(releaseAsset, report);
-      yield* report("installing");
+      yield* report("installing", { checksumVerified: true });
       yield* fileSystem
         .writeFile(archivePath, download)
         .pipe(wrapInstallFailure("write_failed", "Could not write the relay client download."));
@@ -648,7 +662,7 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
       }
       yield* report("validating");
       // Verify the pin so mislabeled assets cannot cause repeated redownloads.
-      const installedVersion = yield* probeVersion(executablePath);
+      const installedVersion = yield* runVersionProbe(executablePath, INSTALL_VALIDATION_TIMEOUT);
       if (installedVersion !== CLOUDFLARED_VERSION) {
         return yield* new RelayClientInstallError({
           reason: "validation_failed",
@@ -691,10 +705,11 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
   });
   const installWithProgress: RelayClientShape["installWithProgress"] = (report) =>
     installSemaphore.withPermit(
-      installUnlocked((stage) =>
+      installUnlocked((stage, facts) =>
         report({
           type: "progress",
           stage,
+          ...facts,
         }),
       ).pipe(Effect.scoped),
     );

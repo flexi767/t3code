@@ -22,15 +22,25 @@ import type {
   SecretProviderId,
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import { CheckIcon, ExternalLinkIcon, LockIcon, MinusIcon, ShieldCheckIcon } from "lucide-react";
+import {
+  CheckIcon,
+  ExternalLinkIcon,
+  KeyRoundIcon,
+  LockIcon,
+  MinusIcon,
+  ShieldCheckIcon,
+} from "lucide-react";
 import { useId, useRef, useState, type FormEvent } from "react";
 
 import { isSecretsFeatureEnabled } from "../../env";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
-import { Input } from "../ui/input";
 import { SecretSourceSelect } from "../settings/SecretSourceInput";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
+import { Kbd } from "../ui/kbd";
+import { Text } from "../ui/text";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { WorkLogRow } from "./WorkLog";
 
 export function SecretRequestCard(props: {
@@ -51,9 +61,10 @@ export function SecretRequestCard(props: {
       <WorkLogRow
         data-v2-item-type={item.type}
         icon={<Icon className="size-3.5 text-icon-muted" aria-hidden />}
+        wrapLabel
         label={
           <>
-            {item.label} · {display.label}
+            {item.label} {display.label.toLowerCase()}
           </>
         }
       />
@@ -132,7 +143,7 @@ function PendingSecretRequestForm(props: {
   return (
     <form
       data-v2-item-type={item.type}
-      className="flex min-w-0 flex-col gap-3 rounded-xl border border-border/60 bg-card p-4"
+      className="flex min-w-0 flex-col rounded-xl surface-tray p-1"
       onSubmit={onSubmit}
       autoComplete="off"
       // On click, not pointerdown: the mousedown that follows a pointerdown
@@ -140,23 +151,41 @@ function PendingSecretRequestForm(props: {
       // leaves it alone so the reason can still be copied.
       onClick={(event) => {
         if (!(event.target instanceof Element)) return;
-        if (event.target.closest("input, button, a")) return;
+        if (event.target.closest("input, button, a, [data-slot='tooltip-trigger']")) return;
         if (window.getSelection()?.isCollapsed === false) return;
         document.getElementById(inputId)?.focus();
       }}
     >
-      <div className="flex min-w-0 flex-col gap-1">
-        <label htmlFor={inputId} className="text-sm font-medium text-foreground">
-          {item.label}
-        </label>
-        {item.reason.trim() ? (
-          <p className="text-sm wrap-anywhere text-muted-foreground">{item.reason}</p>
-        ) : null}
+      <div className="flex min-h-10 min-w-0 items-center gap-2 px-3.5 pb-1.5">
+        <KeyRoundIcon aria-hidden className="size-4 shrink-0 text-warning-foreground" />
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <label htmlFor={inputId} className="min-w-0 truncate text-label text-foreground">
+            {item.label}
+          </label>
+          {item.reason.trim() ? (
+            <p className="min-w-0 flex-1 truncate text-body text-muted-foreground">{item.reason}</p>
+          ) : null}
+        </div>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <span
+                tabIndex={0}
+                aria-describedby={privacyId}
+                className="ms-auto flex shrink-0 items-center gap-1 whitespace-nowrap text-meta text-muted-foreground"
+              />
+            }
+          >
+            <ShieldCheckIcon className="size-3 shrink-0" aria-hidden />
+            {item.delivery === "file" ? "Private file, 24 hours" : "Hidden from agent"}
+          </TooltipTrigger>
+          <TooltipPopup>{secretRequestPrivacyNote(item)}</TooltipPopup>
+        </Tooltip>
       </div>
       {link !== null ? (
-        <div className="flex min-w-0 flex-col items-start gap-1.5">
+        <div className="flex min-w-0 flex-col items-start gap-1.5 px-3.5 pb-1.5">
           <Button
-            variant="outline"
+            variant="secondary"
             size="sm"
             render={<a href={link.href} target="_blank" rel="noopener noreferrer" />}
           >
@@ -165,89 +194,104 @@ function PendingSecretRequestForm(props: {
           </Button>
           {/* A link found in the reason is already shown there. */}
           {item.url !== undefined ? (
-            <p className="font-mono text-xs wrap-anywhere text-muted-foreground">{item.url}</p>
+            <p className="font-mono text-meta wrap-anywhere text-muted-foreground">{item.url}</p>
           ) : null}
         </div>
       ) : null}
-      <div className="flex min-w-0 items-center gap-2">
-        {sources.length > 0 ? (
-          <SecretSourceSelect
-            value={source?.id ?? null}
-            sources={sources}
-            label={item.label}
-            disabled={submitting}
-            onValueChange={(next) => {
-              setSourceId(next);
-              setError(null);
-            }}
-          />
-        ) : null}
-        <div className="min-w-0 flex-1">
-          {source === null ? (
-            <Input
-              id={inputId}
-              // A CSS-masked text field still exposes its value to screen readers.
-              type="password"
-              autoComplete="off"
-              autoCorrect="off"
-              autoCapitalize="off"
-              spellCheck={false}
-              data-1p-ignore
-              data-lpignore="true"
-              data-bwignore
-              placeholder={item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER}
-              value={secret}
+      <span id={privacyId} className="sr-only">
+        {secretRequestPrivacyNote(item)}
+      </span>
+      <div className="flex min-w-0 flex-col gap-2 rounded-lg surface-composer p-2.5">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          {sources.length > 0 ? (
+            <SecretSourceSelect
+              value={source?.id ?? null}
+              sources={sources}
+              label={item.label}
               disabled={submitting}
-              aria-invalid={error !== null || undefined}
-              aria-describedby={describedBy}
-              onChange={(event) => setSecret(event.currentTarget.value)}
-            />
-          ) : (
-            <Input
-              id={inputId}
-              font="mono"
-              autoComplete="off"
-              autoCorrect="off"
-              autoCapitalize="off"
-              spellCheck={false}
-              placeholder={source.referencePlaceholder}
-              value={reference}
-              disabled={submitting}
-              aria-invalid={error !== null || undefined}
-              aria-describedby={describedBy}
-              onChange={(event) => {
-                setReference(event.currentTarget.value);
+              onValueChange={(next) => {
+                setSourceId(next);
                 setError(null);
               }}
             />
-          )}
+          ) : null}
+          <div className="min-w-40 flex-1">
+            <InputGroup size="lg">
+              <InputGroupAddon className="max-w-1/2 min-w-0 shrink-0">
+                <div className="min-w-0 border-e border-divider pe-3">
+                  <Text render={<p />} variant="body" tone="muted" mono truncate title={item.label}>
+                    {item.label}
+                  </Text>
+                </div>
+              </InputGroupAddon>
+              {source === null ? (
+                <InputGroupInput
+                  size="lg"
+                  id={inputId}
+                  // A CSS-masked text field still exposes its value to screen readers.
+                  type="password"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
+                  data-1p-ignore
+                  data-lpignore="true"
+                  data-bwignore
+                  placeholder={item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER}
+                  value={secret}
+                  disabled={submitting}
+                  aria-invalid={error !== null || undefined}
+                  aria-describedby={describedBy}
+                  onChange={(event) => setSecret(event.currentTarget.value)}
+                />
+              ) : (
+                <InputGroupInput
+                  size="lg"
+                  id={inputId}
+                  font="mono"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
+                  placeholder={source.referencePlaceholder}
+                  value={reference}
+                  disabled={submitting}
+                  aria-invalid={error !== null || undefined}
+                  aria-describedby={describedBy}
+                  onChange={(event) => {
+                    setReference(event.currentTarget.value);
+                    setError(null);
+                  }}
+                />
+              )}
+            </InputGroup>
+          </div>
+          <Button
+            type="submit"
+            size="sm"
+            variant="secondary"
+            disabled={submitting || draft.trim().length === 0}
+          >
+            Save securely
+            <Kbd size="sm" aria-hidden>
+              ↵
+            </Kbd>
+          </Button>
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost-muted"
+            disabled={submitting}
+            onClick={() => void send({ type: "decline" })}
+          >
+            Decline
+          </Button>
         </div>
-        <Button type="submit" disabled={submitting || draft.trim().length === 0}>
-          Save securely
-        </Button>
-      </div>
-      {error !== null ? (
-        <p id={errorId} role="alert" className="text-xs text-destructive">
-          {error}
-        </p>
-      ) : null}
-      <div className="flex min-w-0 items-center justify-between gap-2">
-        <p
-          id={privacyId}
-          className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"
-        >
-          <ShieldCheckIcon className="size-3.5 shrink-0" aria-hidden />
-          {secretRequestPrivacyNote(item)}
-        </p>
-        <Button
-          type="button"
-          size="xs"
-          variant="ghost-muted"
-          disabled={submitting}
-          onClick={() => void send({ type: "decline" })}
-        >
-          Decline
-        </Button>
+        {error !== null ? (
+          <p id={errorId} role="alert" className="text-meta text-destructive">
+            {error}
+          </p>
+        ) : null}
       </div>
     </form>
   );

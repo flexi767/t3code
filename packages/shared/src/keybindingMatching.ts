@@ -1,4 +1,4 @@
-import type { KeybindingShortcut } from "@t3tools/contracts";
+import type { KeybindingShortcut, KeybindingWhenNode } from "@t3tools/contracts";
 
 // Matching only: the desktop preview guest bundles this file without the rest of the
 // keybindings module, so it stays free of parsing, defaults, and contracts runtime code.
@@ -56,9 +56,14 @@ export function normalizeEventKey(key: string): string {
   return normalized;
 }
 
-export function shortcutKeyFromEvent(event: Pick<ShortcutEventLike, "key" | "code">): string {
+export function shortcutKeyFromEvent(
+  event: Pick<ShortcutEventLike, "key" | "code" | "shiftKey" | "altKey">,
+): string {
   const layoutKey = normalizeEventKey(event.key);
   if (/^[a-z]$/.test(layoutKey)) return layoutKey;
+  // An unshifted "+" is a dedicated zoom key (German, Spanish, Nordic); Czech types it on Digit1.
+  const isZoomPlus = layoutKey === "+" && !event.shiftKey && !event.altKey;
+  if (isZoomPlus && !event.code?.startsWith("Digit")) return layoutKey;
   const physicalKey = event.code ? EVENT_CODE_SHORTCUT_KEYS[event.code] : undefined;
   return physicalKey ?? layoutKey;
 }
@@ -103,4 +108,22 @@ export function matchesKeybindingShortcut(
     return false;
   if (!matchesKeybindingShortcutModifiers(event, shortcut, platform)) return false;
   return resolveEventKeys(event).has(shortcut.key);
+}
+
+export function evaluateWhenNode(
+  node: KeybindingWhenNode,
+  context: Readonly<Record<string, boolean | undefined>>,
+): boolean {
+  switch (node.type) {
+    case "identifier":
+      if (node.name === "true") return true;
+      if (node.name === "false") return false;
+      return Boolean(context[node.name]);
+    case "not":
+      return !evaluateWhenNode(node.node, context);
+    case "and":
+      return evaluateWhenNode(node.left, context) && evaluateWhenNode(node.right, context);
+    case "or":
+      return evaluateWhenNode(node.left, context) || evaluateWhenNode(node.right, context);
+  }
 }

@@ -1,4 +1,3 @@
-import { pipe } from "effect/Function";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import type { EnvironmentId, ScopedThreadRef, ThreadPullRequestLink } from "@t3tools/contracts";
 import {
@@ -7,7 +6,7 @@ import {
   threadPullRequestKeyOf,
   visibleThreadPullRequests,
 } from "@t3tools/client-runtime/thread-pull-requests";
-import { ChevronDown, ChevronUp } from "lucide";
+import { ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 import { useState, type ComponentProps, type MouseEvent as ReactMouseEvent } from "react";
 
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
@@ -17,7 +16,6 @@ import { useProjects } from "~/state/entities";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 
-import { MorphIcon } from "~/components/MorphIcon";
 import { linkedPullRequestSnapshotStatus, prStatusIndicator } from "../ThreadStatusIndicators";
 
 import { ThreadDetailsPrRow } from "./ThreadDetailsPrRow";
@@ -92,13 +90,15 @@ export function ThreadDetailsPrRows({
             },
           });
   const currentRow = <ThreadDetailsPrRow {...row} onStopWatching={stopWatching(currentLink)} />;
-  const rest =
-    currentLink === null
-      ? []
-      : pipe(visibleThreadPullRequests(links), resolveThreadPullRequestChains, pullRequestListLines)
-          .map((line) => line.link)
-          .filter((link) => threadPullRequestKeyOf(link) !== threadPullRequestKeyOf(currentLink));
-  if (rest.length === 0) return currentRow;
+  const visibleLinks = visibleThreadPullRequests(links);
+  if (currentLink === null || visibleLinks.length <= 1) return currentRow;
+  const restCount = visibleLinks.length - 1;
+  const currentKey = threadPullRequestKeyOf(currentLink);
+  const rest = expanded
+    ? pullRequestListLines(resolveThreadPullRequestChains(visibleLinks))
+        .map((line) => line.link)
+        .filter((link) => threadPullRequestKeyOf(link) !== currentKey)
+    : [];
 
   return (
     <>
@@ -120,18 +120,18 @@ export function ThreadDetailsPrRows({
       <ThreadDetailsControl
         variant="ghost"
         size="sm"
+        aria-expanded={expanded}
         onClick={() => setExpanded(!expanded)}
         part="row"
         tone="muted"
-        className="w-full active:scale-100"
+        className="w-full"
       >
-        <MorphIcon
-          aria-hidden
-          className="size-4 shrink-0"
-          // Chevrons, not plus and minus: the plus already means "add" in this card.
-          icon={expanded ? ChevronUp : ChevronDown}
-        />
-        {expanded ? "Show less" : `Show ${rest.length} more`}
+        {expanded ? (
+          <ChevronUpIcon aria-hidden className="size-4 shrink-0" />
+        ) : (
+          <ChevronDownIcon aria-hidden className="size-4 shrink-0" />
+        )}
+        {expanded ? "Show less" : `Show ${restCount} more`}
       </ThreadDetailsControl>
     </>
   );

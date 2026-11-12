@@ -1,10 +1,11 @@
 import { useEffect, useImperativeHandle, useRef, useState, type RefObject } from "react";
-import { parseDelimitedPreview } from "@t3tools/shared/delimitedPreview";
+import { delimitedColumnKinds, parseDelimitedPreview } from "@t3tools/shared/delimitedPreview";
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
 import { useClientSettings } from "~/hooks/useSettings";
 import { FileSurfaceFailure, FileSurfaceLoading, FileSurfaceNotice } from "./fileSurfaceChrome";
 import { PREVIEW_PAGE_ROWS, type TextPreviewResult } from "./largeTextProtocol";
 import VirtualTablePreview from "./VirtualTablePreview";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 const FIRST_SCREEN_BYTES = 16 * 1024;
 
@@ -210,18 +211,42 @@ export default function LargeTextViewer(props: {
     );
   if (!meta || (meta.count > 0 && !pages.has(0))) return <FileSurfaceLoading />;
   const header = props.delimiter ? pages.get(0)?.[0] : undefined;
+  const columnKinds = props.delimiter
+    ? delimitedColumnKinds(pages.get(0)?.slice(1) ?? [], meta.columns)
+    : undefined;
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <div
-        className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-1 border-b border-border/60 px-3 py-2 text-xs text-muted-foreground tabular-nums"
+        className={
+          props.delimiter
+            ? "order-last flex shrink-0 flex-wrap items-center gap-x-1 px-4 py-1 text-caption text-dim-foreground tabular-nums"
+            : "flex min-h-10 shrink-0 flex-wrap items-center gap-x-1 border-b border-border/60 px-3 py-2 text-meta text-muted-foreground tabular-nums"
+        }
         role="status"
       >
-        {Math.max(0, meta.count - (props.delimiter && meta.count ? 1 : 0)).toLocaleString()}{" "}
-        {props.delimiter ? "rows" : "lines"}
-        {props.delimiter ? ` · ${meta.count ? meta.columns.toLocaleString() : 0} columns` : ""}
-        {meta.complete && meta.sizeBytes !== undefined
-          ? ` · ${meta.sizeBytes === 0 ? "0 bytes" : formatAttachmentSize(meta.sizeBytes)}`
-          : " · Indexing…"}
+        <Tooltip>
+          <TooltipTrigger render={<span tabIndex={0} />}>
+            {Math.max(0, meta.count - (props.delimiter && meta.count ? 1 : 0)).toLocaleString()}{" "}
+            {props.delimiter ? "rows" : "lines"}
+          </TooltipTrigger>
+          <TooltipPopup>
+            {props.delimiter ? (
+              <>
+                <span className="block">
+                  {meta.count ? meta.columns.toLocaleString() : 0} columns
+                </span>
+                <span className="block">{props.delimiter === "," ? "Comma" : "Tab"} separated</span>
+              </>
+            ) : null}
+            <span className="block">
+              {meta.complete && meta.sizeBytes !== undefined
+                ? meta.sizeBytes === 0
+                  ? "0 bytes"
+                  : formatAttachmentSize(meta.sizeBytes)
+                : "Indexing…"}
+            </span>
+          </TooltipPopup>
+        </Tooltip>
       </div>
       {!meta.complete ? (
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20">
@@ -239,6 +264,7 @@ export default function LargeTextViewer(props: {
           count={meta.count}
           columns={meta.columns}
           header={header}
+          columnKinds={columnKinds}
           source={!props.delimiter}
           wrap={wordWrap}
           revealLine={meta.complete ? (props.revealLine ?? null) : null}
@@ -251,7 +277,7 @@ export default function LargeTextViewer(props: {
           }}
         />
       ) : (
-        <div className="flex flex-1 items-center justify-center p-6 text-xs text-muted-foreground">
+        <div className="flex flex-1 items-center justify-center p-6 text-meta text-muted-foreground">
           This file is empty.
         </div>
       )}

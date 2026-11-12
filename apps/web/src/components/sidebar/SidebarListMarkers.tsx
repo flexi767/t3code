@@ -118,7 +118,9 @@ export function SidebarSectionHeader(props: {
   className?: string;
   dragging?: boolean;
   isDropTarget?: boolean;
-  toggle: { expanded: boolean; onToggle: () => void };
+  /** Keeps the header's layout space while removing it from keyboard and accessibility trees. */
+  concealed?: boolean;
+  toggle: { expanded: boolean; onToggle: (header: HTMLElement) => void } | null;
 }) {
   const shelf =
     props.marker === "working-header"
@@ -134,11 +136,17 @@ export function SidebarSectionHeader(props: {
     >
       <CollapsibleSectionHeader
         data-sidebar-row={`shelf:${shelf}`}
-        onClick={props.toggle.onToggle}
-        expanded={props.toggle.expanded}
-        tone={props.isDropTarget ? "accent" : props.dragging ? "emphasized" : "muted"}
+        aria-hidden={props.concealed ? true : undefined}
+        tabIndex={props.concealed ? -1 : undefined}
+        // A click must not focus the toggle: Chromium shows the focus ring on
+        // a clicked button once any key is pressed, even a lone modifier.
+        onPointerDown={(event) => event.preventDefault()}
+        onClick={(event) => props.toggle?.onToggle(event.currentTarget)}
+        disabled={props.toggle === null}
+        expanded={props.toggle?.expanded}
+        tone={props.isDropTarget ? "accent" : props.dragging ? "emphasized" : "shelf"}
         data-testid={`sidebar-${shelf}-shelf-toggle`}
-        accessory={<span className="font-normal tabular-nums">{props.count}</span>}
+        accessory={<span className="text-meta tabular-nums">{props.count}</span>}
       >
         {props.label}
       </CollapsibleSectionHeader>

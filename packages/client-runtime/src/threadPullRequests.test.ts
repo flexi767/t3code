@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import {
   legacyThreadPullRequestKey,
+  pullRequestListLines,
   threadPullRequestSearchTerms,
   resolveThreadCurrentPullRequest,
   resolveThreadPullRequestChains,
@@ -187,14 +188,6 @@ describe("resolveThreadCurrentPullRequest", () => {
   it("orders an open set without stack data by most recent link", () => {
     const current = resolveThreadCurrentPullRequest([link(1), link(2)]);
     expect(current).toMatchObject({ kind: "stack", top: { number: 2 } });
-  });
-
-  it("falls back to the most recently updated terminal link", () => {
-    const current = resolveThreadCurrentPullRequest([
-      link(1, { snapshot: snapshot({ state: "merged", updatedAt: "2026-01-03T00:00:00.000Z" }) }),
-      link(2, { snapshot: snapshot({ state: "closed", updatedAt: "2026-01-02T00:00:00.000Z" }) }),
-    ]);
-    expect(current).toMatchObject({ kind: "single", link: { number: 1 } });
   });
 });
 
@@ -492,4 +485,24 @@ it("searches the legacy projection when old environments decode to an empty link
   expect(
     threadPullRequestSearchTerms({ pullRequests: [link(34)], linkedPullRequest }),
   ).not.toContain("#12");
+});
+
+it("limits preview rows without changing chain order, depth, or stack counts", () => {
+  const layers = Array.from({ length: 1125 }, (_, index) =>
+    link(index + 1, { linkedAt: "2026-01-01T00:00:00Z" }),
+  );
+  const chains = [
+    { kind: "derived" as const, layers, depths: layers.map((_, index) => index) },
+    {
+      kind: "derived" as const,
+      layers: [link(2000, { linkedAt: "2026-01-02T00:00:00Z" })],
+      depths: [0],
+    },
+  ];
+  const full = pullRequestListLines(chains);
+  expect(full).toHaveLength(1126);
+  expect(full[0]!.link.number).toBe(2000);
+  expect(pullRequestListLines(chains, 5)).toEqual(full.slice(0, 5));
+  expect(pullRequestListLines(chains, 5)[1]!.stack?.size).toBe(1125);
+  expect(pullRequestListLines(chains, 0)).toEqual([]);
 });

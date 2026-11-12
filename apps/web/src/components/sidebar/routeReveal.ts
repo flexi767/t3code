@@ -1,5 +1,7 @@
 import { useRef } from "react";
 
+import { observeResize } from "~/lib/observeResize";
+
 import { filterSidebarV2VisibleThreads } from "../Sidebar.logic";
 
 // AppSidebarLayout owns this so drawer and Settings remounts preserve the chosen project scope.
@@ -9,6 +11,7 @@ import { filterSidebarV2VisibleThreads } from "../Sidebar.logic";
 export interface SidebarRouteReveal {
   observedKey: string | null;
   pendingKey: string | null;
+  quietKey?: string | null;
 }
 
 export function pendingSidebarRouteReveal(
@@ -19,30 +22,61 @@ export function pendingSidebarRouteReveal(
   if (reveal.observedKey !== routeKey) {
     reveal.observedKey = routeKey;
     reveal.pendingKey = routeKey;
+    reveal.quietKey = null;
   }
   return reveal.pendingKey;
 }
 
+export function observeSidebarDraftPromotion(
+  reveal: SidebarRouteReveal,
+  routeKey: string | null,
+): void {
+  if (routeKey === null || reveal.observedKey === routeKey) return;
+  reveal.observedKey = routeKey;
+  reveal.pendingKey = null;
+  reveal.quietKey = routeKey;
+}
+
 export function completeSidebarRouteReveal(reveal: SidebarRouteReveal): void {
   reveal.pendingKey = null;
+  reveal.quietKey = null;
 }
+
+const scrollRowIntoView = (row: HTMLElement) => row.scrollIntoView({ block: "nearest" });
 
 // Each route change and each mount scroll to the open thread once. Render records
 // the route, so a thread left before its row mounted still counts as a change.
 // The row can mount after the route, once its shells arrive, so its ref scrolls.
-export function useActiveRowReveal(reveal: SidebarRouteReveal, routeKey: string | null) {
+export function useActiveRowReveal(
+  reveal: SidebarRouteReveal,
+  routeKey: string | null,
+  scrollRow: (row: HTMLElement) => void = scrollRowIntoView,
+) {
   const mountRevealOwed = useRef(true);
   pendingSidebarRouteReveal(reveal, routeKey);
-  return (row: HTMLElement | null, rowKey: string) => {
-    if (row === null) return;
-    if (reveal.pendingKey !== rowKey && !mountRevealOwed.current) return;
+  // Returns a ref cleanup while it waits on a hidden row, so an unmount releases the wait.
+  const revealRow = (row: HTMLElement | null, rowKey: string): (() => void) | undefined => {
+    if (row === null) return undefined;
+    if (reveal.pendingKey !== rowKey && !mountRevealOwed.current) return undefined;
+    // The closed narrow sheet keeps rows mounted but hidden, and opening it does not
+    // re-render them, so wait for the row to get a box before spending the reveal.
+    if (row.getClientRects().length === 0) {
+      const stopWaiting = observeResize(row, () => {
+        if (row.getClientRects().length === 0) return;
+        stopWaiting();
+        revealRow(row, rowKey);
+      });
+      return stopWaiting;
+    }
     completeSidebarRouteReveal(reveal);
     mountRevealOwed.current = false;
     // A row under the pointer was just clicked, so it is in view; scrolling it would force a
     // layout mid-commit. Keyboard activation can come from a focused row scrolled out of view.
-    if (row.matches(":hover")) return;
-    row.scrollIntoView({ block: "nearest" });
+    if (row.matches(":hover")) return undefined;
+    scrollRow(row);
+    return undefined;
   };
+  return revealRow;
 }
 
 type RevealableThread = Parameters<typeof filterSidebarV2VisibleThreads>[0][number];

@@ -15,11 +15,11 @@ import {
   Square,
   Type,
   X,
+  MoonIcon,
+  SunIcon,
 } from "lucide-react";
-import { Moon, Sun } from "lucide";
 import type { ReactNode } from "react";
 import { Button } from "~/components/ui/button";
-import { MorphIcon } from "~/components/MorphIcon";
 import {
   Menu,
   MenuItem,
@@ -44,7 +44,8 @@ export function DeviceControlsRail(props: {
   onScreenshot: () => void;
   toolsOpen: boolean;
   onTools: () => void;
-  onFloat: () => void;
+  /** Absent where there is no chat to float over (a threadless surface). */
+  onFloat?: (() => void) | undefined;
   onClose: () => void;
   onPowerOff: () => void;
 }) {
@@ -60,7 +61,7 @@ export function DeviceControlsRail(props: {
       data-layout="rail"
       className="pointer-events-none absolute inset-y-0 right-0 z-10 flex w-14 flex-col items-center gap-2 overflow-y-auto [justify-content:safe_center] py-3 pr-2 [scrollbar-width:none]"
     >
-      <div className="pointer-events-auto flex shrink-0 flex-col items-center gap-1 overflow-y-auto rounded-full border border-border/50 bg-background/80 p-2 shadow-sm [scrollbar-width:none]">
+      <div className="pointer-events-auto flex shrink-0 flex-col items-center gap-1 overflow-y-auto rounded-full surface-panel p-2 [scrollbar-width:none]">
         <RailButton
           tooltipSide={popupSide}
           label="Home"
@@ -137,7 +138,7 @@ export function DeviceControlsRail(props: {
               disabled={controls.disabled || !settings?.appearance}
               onClick={() => void controls.act({ type: "setAppearance", value: nextAppearance })}
             >
-              <MorphIcon icon={settings?.appearance === "dark" ? Sun : Moon} />
+              {settings?.appearance === "dark" ? <SunIcon /> : <MoonIcon />}
             </RailButton>
             <Menu>
               <MenuTrigger
@@ -218,10 +219,12 @@ export function DeviceControlsRail(props: {
             <MoreHorizontal />
           </MenuTrigger>
           <MenuPopup side={popupSide} align="end">
-            <MenuItem onClick={props.onFloat}>
-              <PictureInPicture2 />
-              Float device over chat
-            </MenuItem>
+            {props.onFloat ? (
+              <MenuItem onClick={props.onFloat}>
+                <PictureInPicture2 />
+                Float device over chat
+              </MenuItem>
+            ) : null}
             <MenuItem onClick={props.onClose}>
               <X />
               Close device panel
@@ -275,7 +278,7 @@ export function DeviceControlsRail(props: {
 }
 
 function RailDivider() {
-  return <div aria-hidden className="my-1 h-px w-5 shrink-0 bg-border/70" />;
+  return <div aria-hidden className="my-1 h-px w-5 shrink-0 bg-border" />;
 }
 
 function RailButton(props: {

@@ -28,7 +28,8 @@ export function exhaustedUsageWindow(
   now: number,
   model?: string,
 ) {
-  const exhausted = (provider?.usageLimits?.windows ?? []).filter(
+  const windows = provider?.usageLimits?.windows ?? [];
+  const exhausted = windows.filter(
     (window) =>
       (window.usedPercent ?? 0) >= 100 &&
       (!window.resetsAt ||
@@ -53,6 +54,13 @@ export function exhaustedUsageWindow(
           (pool === "3p" && (family === "claude" || family === "gpt"))
         );
       });
+    }
+    case "codex": {
+      // Seat-based plans spend credits only past their plan windows, so the credit cap blocks only plans without them.
+      const hasPlanWindows = windows.some(
+        (window) => window.id === "primary" || window.id === "secondary",
+      );
+      return exhausted.find((window) => window.id !== "individual" || !hasPlanWindows);
     }
     case "opencode":
       return exhausted.find(
@@ -119,12 +127,12 @@ export const CURSOR_USAGE_WINDOWS = [
   {
     id: "totalPercentUsed",
     label: "Overall",
-    description: "Combined usage across both allowances, not a third quota.",
+    description: "All usage on your plan this billing cycle.",
   },
   {
     id: "autoPercentUsed",
     label: "Cursor Models",
-    description: "Grok and Composer use this first. Auto can use either pool.",
+    description: "Grok, Composer, and Auto use this allowance.",
   },
   {
     id: "apiPercentUsed",
@@ -214,6 +222,30 @@ const nativeReport = (provider: ServerProvider): AccountReport => ({
   workspaceId: provider.auth.workspaceId,
   usageLimits: provider.usageLimits,
 });
+
+/** Resolve the selected login across native duplicates and linked usage sources. */
+export function resolveProviderUsageLimits(
+  instanceId: ProviderInstanceId,
+  providers: readonly ServerProvider[],
+  sources: UsageLimitSourceSnapshots,
+): ServerProviderUsageLimits | undefined {
+  const selected = providers.find((provider) => provider.instanceId === instanceId);
+  if (!selected) return undefined;
+  const reports = [
+    ...providers.filter((provider) => provider.enabled).map(nativeReport),
+    ...sources.flatMap((source) => source.accounts),
+  ];
+  const resolveKey = accountKeyResolver(reports);
+  const key = resolveKey(nativeReport(selected));
+  const candidates = key === null ? [] : reports.filter((report) => resolveKey(report) === key);
+  return (
+    candidates
+      .flatMap((report) =>
+        report.usageLimits && limitsNotice(report.usageLimits) === null ? [report.usageLimits] : [],
+      )
+      .sort((a, b) => Date.parse(b.checkedAt) - Date.parse(a.checkedAt))[0] ?? selected.usageLimits
+  );
+}
 
 // Include every enabled login, even unreadable workspaces.
 function accountKeyResolver(reports: Iterable<AccountReport>) {
@@ -393,24 +425,24 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
 export function collectLimitNotices(presentations: LimitPresentations): readonly string[] {
   const label = (environmentLabel: string, subject: string) =>
     presentations.size > 1 ? `${environmentLabel} · ${subject}` : subject;
-  const notices: string[] = [];
+  const notices = new Set<string>();
   for (const presentation of presentations.values()) {
     const environmentLabel = presentation.entry.target.label;
     for (const provider of providersWithLimits(presentation.serverConfig?.providers ?? [])) {
       if (provider.usageLimits?.unavailable?.reason === "unsupported") continue;
       const notice = provider.usageLimits ? limitsNotice(provider.usageLimits) : null;
       const name = provider.displayName?.trim() || String(provider.driver);
-      if (notice) notices.push(`${label(environmentLabel, name)}: ${notice}`);
+      if (notice) notices.add(`${label(environmentLabel, name)}: ${notice}`);
     }
     for (const source of presentation.serverConfig?.usageLimitSources ?? []) {
       if (source.error) {
-        notices.push(`${label(environmentLabel, source.label)}: ${source.error}`);
+        notices.add(`${label(environmentLabel, source.label)}: ${source.error}`);
       } else if (source.accounts.length === 0) {
-        notices.push(`${label(environmentLabel, source.label)}: No accounts reported.`);
+        notices.add(`${label(environmentLabel, source.label)}: No accounts reported.`);
       }
     }
   }
-  return notices;
+  return [...notices];
 }
 
 export interface LimitPoolMember {
@@ -734,6 +766,69 @@ export function formatResetsIn(window: ServerProviderUsageWindow, now: number): 
   return `resets in ${formatDuration(resetsAt - now)}`;
 }
 
+/** Under this share of quota left, a window reads as low: amber, and worth a notice. */
+const LOW_LIMIT_REMAINING_PERCENT = 25;
+
+/** Whether the window has less than a quarter of its quota left. */
+export function isLowLimit(window: ServerProviderUsageWindow): boolean {
+  return remainingPercent(window) < LOW_LIMIT_REMAINING_PERCENT;
+}
+
+/**
+ * Milliseconds until the window's quota runs out at the rate spent so far,
+ * or null when that rate is unknown or the window resets first.
+ */
+export function projectRunOut(window: ServerProviderUsageWindow, now: number): number | null {
+  const resetsAt = resetMillis(window);
+  const elapsed = elapsedShare(window, now);
+  if (resetsAt === null || elapsed === null || window.windowDurationMins === undefined) {
+    return null;
+  }
+  const used = Math.max(0, Math.min(100, window.usedPercent));
+  const elapsedMs = elapsed * window.windowDurationMins * MINUTE;
+  if (used <= 0 || elapsedMs <= 0) return null;
+  if (used >= 100) return 0;
+  const runOut = ((100 - used) / used) * elapsedMs;
+  return runOut < resetsAt - now ? runOut : null;
+}
+
+/** `runs out in about 40m`, or null when the window resets before it runs dry. */
+export function formatRunsOutIn(window: ServerProviderUsageWindow, now: number): string | null {
+  const runOut = projectRunOut(window, now);
+  if (runOut === null) return null;
+  return runOut < MINUTE ? "runs out now" : `runs out in about ${formatDuration(runOut)}`;
+}
+
+export interface TightestLimit {
+  readonly account: LimitAccount;
+  readonly window: ServerProviderUsageWindow;
+  readonly remainingPercent: number;
+}
+
+/**
+ * The session window with the least quota left across the accounts, optionally
+ * for one driver. Accounts with no session window fall back to their shortest
+ * window kind, so a monthly-only plan still has something to report.
+ */
+export function tightestSessionLimit(
+  accounts: readonly LimitAccount[],
+  driver?: ServerProvider["driver"],
+): TightestLimit | null {
+  let tightest: TightestLimit | null = null;
+  for (const account of accounts) {
+    if (driver !== undefined && account.driver !== driver) continue;
+    const window = [...account.limits.windows].sort(
+      (left, right) => WINDOW_KIND_ORDER[left.kind] - WINDOW_KIND_ORDER[right.kind],
+    )[0];
+    if (!window) continue;
+    const remaining = remainingPercent(window);
+    if (tightest === null || remaining < tightest.remainingPercent) {
+      tightest = { account, window, remainingPercent: remaining };
+    }
+  }
+  return tightest;
+}
+
 export const USAGE_LIMITS_COMMAND = {
   name: "usage-limits",
   description: "Show this provider's usage limits",
@@ -905,16 +1000,25 @@ export function collectProviderUsageLimits(
       limits: shownCredits ? { ...limits, resetCredits: shownCredits } : limits,
     });
   }
+  let proxyAccountNumber = 0;
   for (const source of sources) {
     const matching = source.accounts.filter((account) => account.driver === selected.driver);
     for (const account of matching) {
       const key = resolveKey(account);
       if (key && nativeAccountKeys.has(key)) continue;
+      proxyAccountNumber += 1;
+      const driverLabel =
+        account.driver === "claudeAgent"
+          ? "Claude"
+          : String(account.driver).charAt(0).toUpperCase() + String(account.driver).slice(1);
       accounts.push({
         id: `${source.id}:${account.id}`,
         driver: account.driver,
-        label: `${source.label} · ${hubAccountName(account)}`,
-        sourceLabel: "CLI Proxy",
+        label:
+          account.email?.trim() ||
+          hubAccountName(account) ||
+          `${driverLabel} account ${proxyAccountNumber}`,
+        sourceLabel: source.label,
         ...(account.usageLimits.resetCredits?.nextCreditId
           ? {
               resetCreditInput: {

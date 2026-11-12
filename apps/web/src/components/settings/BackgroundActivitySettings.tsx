@@ -124,9 +124,9 @@ function BackgroundActivityAdvancedDialog({
         <DialogPanel>
           <fieldset
             disabled={!canWriteSettings}
-            className="min-w-0 overflow-hidden rounded-xl border bg-card text-card-foreground"
+            className="min-w-0 overflow-hidden rounded-card border border-transparent surface-card-settings text-foreground"
           >
-            <div className="flex flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-3 border-b border-border/50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0 space-y-1">
                 <div className="text-sm font-medium">Shared policy</div>
                 <p className="text-xs leading-relaxed text-muted-foreground">
@@ -148,27 +148,28 @@ function BackgroundActivityAdvancedDialog({
                 }}
               >
                 <SelectTrigger
-                  size="sm"
+                  variant="well"
+                  size="compact"
                   className="w-full sm:w-40"
                   aria-label="Shared background policy"
                 >
                   <SelectValue>{BACKGROUND_ACTIVITY_PROFILE_LABELS[activeProfile]}</SelectValue>
                 </SelectTrigger>
                 <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem hideIndicator value="balanced">
+                  <SelectItem value="balanced">
                     {BACKGROUND_ACTIVITY_PROFILE_LABELS.balanced}
                   </SelectItem>
-                  <SelectItem hideIndicator value="performance">
+                  <SelectItem value="performance">
                     {BACKGROUND_ACTIVITY_PROFILE_LABELS.performance}
                   </SelectItem>
-                  <SelectItem hideIndicator value="battery-saver">
+                  <SelectItem value="battery-saver">
                     {BACKGROUND_ACTIVITY_PROFILE_LABELS["battery-saver"]}
                   </SelectItem>
                 </SelectPopup>
               </Select>
             </div>
 
-            <div className="flex flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-3 border-b border-border/50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0 space-y-1">
                 <div className="text-sm font-medium">
                   {searchableSetting("git-fetch-interval").title}
@@ -227,7 +228,7 @@ function BackgroundActivityAdvancedDialog({
               </div>
             </div>
 
-            <div className="flex flex-col gap-3 border-t px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-3 border-t border-border/50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0 space-y-1">
                 <div className="text-sm font-medium">Host power monitor</div>
                 <p className="text-xs leading-relaxed text-muted-foreground">
@@ -255,7 +256,7 @@ function BackgroundActivityAdvancedDialog({
               </div>
             </div>
 
-            <div className="flex flex-col gap-3 border-t px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-3 border-t border-border/50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0 space-y-1">
                 <div className="text-sm font-medium">Idle host monitor</div>
                 <p className="text-xs leading-relaxed text-muted-foreground">
@@ -283,11 +284,11 @@ function BackgroundActivityAdvancedDialog({
               </div>
             </div>
 
-            <div className="grid gap-0 border-t sm:grid-cols-2">
+            <div className="grid gap-0 border-t border-border/50 sm:grid-cols-2">
               {BACKGROUND_ACTIVITY_BOOLEAN_OVERRIDES.map(({ key, label }) => (
                 <label
                   key={key}
-                  className="flex items-center justify-between gap-3 border-b px-4 py-3 last:border-b-0 sm:border-r sm:even:border-r-0"
+                  className="flex items-center justify-between gap-3 border-b border-border/50 px-4 py-3 last:border-b-0 sm:border-r sm:even:border-r-0"
                 >
                   <span className="text-sm font-medium">{label}</span>
                   <Switch
@@ -312,7 +313,7 @@ function BackgroundActivityAdvancedDialog({
         </DialogPanel>
         <DialogFooter>
           <Button
-            variant="outline"
+            variant="secondary"
             disabled={!canWriteSettings}
             onClick={() => updateSettings(resetBackgroundActivitySettings())}
           >
@@ -385,7 +386,8 @@ export function BackgroundActivitySettingsRow() {
             }}
           >
             <SelectTrigger
-              size="sm"
+              variant="well"
+              size="compact"
               className="w-full sm:w-40"
               aria-label="Background activity profile"
             >
@@ -396,16 +398,16 @@ export function BackgroundActivitySettingsRow() {
               </SelectValue>
             </SelectTrigger>
             <SelectPopup align="end" alignItemWithTrigger={false}>
-              <SelectItem hideIndicator value="balanced">
+              <SelectItem value="balanced">
                 {BACKGROUND_ACTIVITY_PROFILE_LABELS.balanced}
               </SelectItem>
-              <SelectItem hideIndicator value="performance">
+              <SelectItem value="performance">
                 {BACKGROUND_ACTIVITY_PROFILE_LABELS.performance}
               </SelectItem>
-              <SelectItem hideIndicator value="battery-saver">
+              <SelectItem value="battery-saver">
                 {BACKGROUND_ACTIVITY_PROFILE_LABELS["battery-saver"]}
               </SelectItem>
-              <SelectItem hideIndicator value="advanced" disabled={!isEnvironmentScope}>
+              <SelectItem value="advanced" disabled={!isEnvironmentScope}>
                 {isEnvironmentScope
                   ? BACKGROUND_ACTIVITY_PROFILE_OPTION_LABELS.advanced
                   : `${BACKGROUND_ACTIVITY_PROFILE_OPTION_LABELS.advanced} (one environment)`}
@@ -418,7 +420,7 @@ export function BackgroundActivitySettingsRow() {
                 render={
                   <Button
                     size="icon-sm"
-                    variant="outline"
+                    variant="secondary"
                     aria-label="Configure advanced background activity"
                     onClick={() => setBackgroundActivityDialogOpen(true)}
                   >

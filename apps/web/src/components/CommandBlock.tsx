@@ -1,6 +1,5 @@
-import { Check, Copy } from "lucide";
+import { CheckIcon, CopyIcon } from "lucide-react";
 
-import { MorphIcon } from "~/components/MorphIcon";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { cn } from "~/lib/utils";
 
@@ -10,10 +9,12 @@ export function CommandBlock({
   command,
   className,
   prominent = false,
+  compact = false,
 }: {
   readonly command: string;
   readonly className?: string;
   readonly prominent?: boolean;
+  readonly compact?: boolean;
 }) {
   const { copyToClipboard, isCopied } = useCopyToClipboard({
     timeout: 1500,
@@ -22,13 +23,17 @@ export function CommandBlock({
   return (
     <div
       className={cn(
-        "flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/50 font-mono",
-        prominent ? "px-4 py-3.5 text-base" : "px-3 py-2.5 text-sm",
+        "flex items-center justify-between gap-3 rounded-control surface-well font-mono",
+        compact
+          ? "h-8 gap-2 pr-1.5 pl-2.5 text-caption"
+          : prominent
+            ? "px-4 py-3.5 text-prompt"
+            : "px-3 py-2.5 text-body",
         className,
       )}
     >
       <span className="min-w-0 truncate">
-        <span className="mr-2 text-muted-foreground">$</span>
+        {compact ? null : <span className="mr-2 text-muted-foreground">$</span>}
         {command}
       </span>
       <Button
@@ -37,7 +42,7 @@ export function CommandBlock({
         aria-label="Copy command"
         onClick={() => copyToClipboard(command, undefined)}
       >
-        <MorphIcon className="size-3.5" icon={isCopied ? Check : Copy} />
+        {isCopied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
       </Button>
     </div>
   );

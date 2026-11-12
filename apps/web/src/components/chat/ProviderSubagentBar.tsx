@@ -33,7 +33,7 @@ export function ProviderSubagentBar(props: {
   // chat column on a wide window, and one row there squeezes out the model
   // and status, so the status drops to its own line instead.
   return (
-    <div className="flex min-h-12 items-center gap-3 rounded-2xl py-2 ps-5 pe-2 text-sm">
+    <div className="surface-composer-banner flex min-h-12 items-center gap-3 py-2 ps-5 pe-2 text-sm">
       <div className="flex min-w-0 flex-1 items-center gap-3 @max-[560px]/composer-surface:flex-col @max-[560px]/composer-surface:items-start @max-[560px]/composer-surface:gap-0.5">
         <span className="flex min-w-0 max-w-full items-center gap-2">
           {props.provider ? (
@@ -57,7 +57,7 @@ export function ProviderSubagentBar(props: {
         <span
           ref={tickTextContent((nowMs) => formatProviderSubagentStatus(status, nowMs), live)}
           aria-hidden
-          className="min-w-0 max-w-full truncate text-muted-foreground tabular-nums @max-[560px]/composer-surface:text-xs"
+          className="min-w-0 max-w-full truncate text-muted-foreground tabular-nums @max-[560px]/composer-surface:text-meta"
         />
       </div>
       <span role="status" className="sr-only">
