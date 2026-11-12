@@ -4,6 +4,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   type RefObject,
+  useState,
 } from "react";
 
 import { cn } from "~/lib/utils";
@@ -28,6 +29,8 @@ export interface SidebarThreadHeaderProps {
   searchResultCount: number;
   activeSearchResultIndex: number;
   onClearSearch: () => void;
+  /** Lifts the row onto the window's top row (Labs: Title bar search). */
+  inTitleBar?: boolean;
 }
 
 export function SidebarThreadHeader({
@@ -45,7 +48,9 @@ export function SidebarThreadHeader({
   searchResultCount,
   activeSearchResultIndex,
   onClearSearch,
+  inTitleBar = false,
 }: SidebarThreadHeaderProps) {
+  const [searchFocused, setSearchFocused] = useState(false);
   const resultsVisible = isSearching && searchResultCount > 0;
   // Shrinking results can remove the active option; never leave aria-activedescendant pointing at it.
   const activeResultExists = resultsVisible && activeSearchResultIndex < searchResultCount;
@@ -54,7 +59,14 @@ export function SidebarThreadHeader({
     : "New thread";
 
   return (
-    <div className="flex items-center gap-1">
+    <div
+      className={cn(
+        "flex items-center gap-1",
+        // Centered on the chrome row above this group, right of the traffic lights.
+        inTitleBar &&
+          "pointer-events-auto absolute top-[calc(var(--workspace-controls-top)+(var(--workspace-chrome-row-height)-1.75rem)/2-var(--workspace-chrome-row-height)+(--spacing(1)))] right-(--sidebar-content-inset) left-[var(--workspace-controls-left)] [-webkit-app-region:no-drag]",
+      )}
+    >
       <InputGroup size="sidebar" className="min-w-0 flex-1">
         <InputGroupAddon>
           {/* A 16px slot like a row's favicon, pulled out like the addon's own
@@ -70,7 +82,14 @@ export function SidebarThreadHeader({
           type="search"
           value={searchQuery}
           onChange={(event) => onSearchQueryChange(event.currentTarget.value)}
-          onKeyDown={onSearchKeyDown}
+          onKeyDown={(event) => {
+            if (inTitleBar && event.key === "Escape" && searchQuery === "") {
+              event.currentTarget.blur();
+            }
+            onSearchKeyDown(event);
+          }}
+          onFocus={() => setSearchFocused(true)}
+          onBlur={() => setSearchFocused(false)}
           placeholder="Search"
           aria-label="Search threads"
           role="combobox"
@@ -104,7 +123,9 @@ export function SidebarThreadHeader({
         ) : null}
       </InputGroup>
       {/* Three 28px controls with 4px gaps (pen s8qVFu). */}
-      <div className="flex shrink-0 items-center gap-1">
+      <div
+        className={cn("flex shrink-0 items-center gap-1", inTitleBar && searchFocused && "hidden")}
+      >
         {hasProjects ? projectScope : null}
         <SidebarHeaderIconButton label="Add project" onClick={onNewProject}>
           <FolderPlusIcon />

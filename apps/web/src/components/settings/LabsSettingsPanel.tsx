@@ -20,6 +20,7 @@ export function LabsSettingsPanel() {
       <SettingsSection id="beta" title="Beta">
         <ScrollingWorkspacesRow />
         <BoringSidebarRow />
+        <SidebarTitleBarSearchRow />
         {/* Clerk is only mounted when this build has T3 Connect. */}
         {hasCloudPublicConfig() ? <GuestLinksRowWithSignIn /> : <GuestLinksRow />}
         <LinkedEnvironmentsRow />
@@ -73,6 +74,24 @@ function BoringSidebarRow() {
         </div>
       ) : null}
     </SettingsRow>
+  );
+}
+
+function SidebarTitleBarSearchRow() {
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  return (
+    <SettingsRow
+      {...searchableSetting("sidebar-title-bar-search")}
+      description="Put thread search and the sidebar's buttons on the window's top row. The sidebar toggle and back and forward stack beside the first tab."
+      control={
+        <Switch
+          checked={settings.sidebarTitleBarSearch}
+          onCheckedChange={(checked) => updateSettings({ sidebarTitleBarSearch: Boolean(checked) })}
+          aria-label="Title bar search"
+        />
+      }
+    />
   );
 }
 

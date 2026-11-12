@@ -1099,6 +1099,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     },
   });
   const boringSidebarEnabled = useClientSettings((settings) => settings.boringSidebarEnabled);
+  const titleBarSearch = useClientSettings((settings) => settings.sidebarTitleBarSearch);
   const folderRowsMultiline = useClientSettings((settings) => settings.boringSidebarMultilineRows);
   const newThreadContext = useHandleNewThread();
   // Row callbacks capture only the handler; the rest of the context changes with the route.
@@ -3302,8 +3303,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         ref={sidebarContentRef}
         className="min-h-full"
         fixedHeader={
-          <SidebarGroup className="z-[1]">
+          // In the title bar the header leaves this group empty, so it lets clicks through.
+          <SidebarGroup className={cn("z-[1]", titleBarSearch && "pointer-events-none -mb-4")}>
             <SidebarThreadHeader
+              inTitleBar={titleBarSearch}
               hasProjects={projectGroups.length > 0}
               projectScope={
                 <Combobox

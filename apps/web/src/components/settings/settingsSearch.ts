@@ -555,6 +555,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["sidebar folder indent indentation flush left align spacing margin compact"],
   },
   {
+    id: "sidebar-title-bar-search",
+    title: "Title bar search",
+    to: "/settings/labs",
+    searchTerms: ["thread search top row title bar compact header"],
+  },
+  {
     id: "tool-call-visibility",
     title: "Tool calls in chat",
     to: "/settings/chat",

@@ -41,6 +41,7 @@ import { cn, isMacPlatform } from "../lib/utils";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import {
+  useClientSettings,
   useEnvironmentIdentificationMode,
   useHideWindowControlsWhenSidebarCollapsed,
 } from "../hooks/useSettings";
@@ -347,9 +348,14 @@ function SidebarControl({ showSidebar }: { readonly showSidebar: boolean }) {
   const router = useRouter();
   const usagePageOpen = useLocation({ select: (location) => location.pathname === "/usage" });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const { toggleSidebar } = useSidebar();
+  const { toggleSidebar, isMobile } = useSidebar();
   const mobileSidebarSheetMounted = useMobileSidebarSheetMounted();
   const isSidebarVisible = useSidebarVisibility();
+  // Title bar search takes this row in the sidebar, so the controls stack beside the first tab.
+  const stacked =
+    useClientSettings((settings) => settings.sidebarTitleBarSearch) &&
+    isSidebarVisible &&
+    !isMobile;
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const stageBackdropVariant = useSidebarStageBackdropVariant(environmentIdentificationMode);
   const shortcutLabel = shortcutLabelForCommand(keybindings, "sidebar.toggle", {
@@ -421,7 +427,10 @@ function SidebarControl({ showSidebar }: { readonly showSidebar: boolean }) {
     <div
       ref={appShellCommandsRef}
       className={cn(
-        "pointer-events-none fixed left-[var(--workspace-controls-left)] top-[var(--workspace-controls-top)] z-50 ml-px flex h-[var(--workspace-topbar-height)] items-center",
+        "pointer-events-none fixed top-[var(--workspace-controls-top)] z-50 flex h-[var(--workspace-topbar-height)] items-center",
+        stacked
+          ? "left-[calc(var(--sidebar-width)+2px)] flex-col justify-center [--workspace-titlebar-control-size:1rem] [&_button]:size-4 [&_svg]:size-3"
+          : "left-[var(--workspace-controls-left)] ml-px",
         mobileSidebarSheetMounted && "hidden",
       )}
       // Sits on the window chrome, so it takes the black chrome tokens too.
@@ -458,7 +467,12 @@ function SidebarControl({ showSidebar }: { readonly showSidebar: boolean }) {
         </div>
       ) : null}
       {/* Phones keep the header for the page; the system back gesture covers them. */}
-      <div className="pointer-events-auto hidden items-center [-webkit-app-region:no-drag] md:flex">
+      <div
+        className={cn(
+          "pointer-events-auto hidden items-center [-webkit-app-region:no-drag] md:flex",
+          stacked && "flex-col",
+        )}
+      >
         <NavigationHistoryButton direction="back" onStageBackdrop={onStageBackdrop} />
         <NavigationHistoryButton direction="forward" onStageBackdrop={onStageBackdrop} />
       </div>
