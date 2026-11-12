@@ -147,8 +147,8 @@ export function SidebarThreadHeader({
           disabled={newThreadDisabled}
           onClick={onNewThread}
         >
-          {/* Lines up with its neighbours' glyphs in the title bar. */}
-          <SquarePenIcon className={cn(inTitleBar && "translate-y-px")} />
+          {/* The pen's glyph fills more of its box, so 13px matches its 14px neighbours. */}
+          <SquarePenIcon className={cn(inTitleBar && "size-[13px] translate-y-px")} />
         </SidebarHeaderIconButton>
       </div>
     </div>
