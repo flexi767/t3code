@@ -427,7 +427,7 @@ function SidebarControl({ showSidebar }: { readonly showSidebar: boolean }) {
       className={cn(
         "pointer-events-none fixed top-[var(--workspace-controls-top)] z-50 flex h-[var(--workspace-topbar-height)] items-center",
         stacked
-          ? "left-[calc(var(--sidebar-width)+2px)] flex-col justify-center [--workspace-titlebar-control-size:1rem] [&_button]:size-4 [&_svg]:size-3 [&_svg]:text-muted-foreground"
+          ? "left-[calc(var(--sidebar-width)+2px)] flex-col justify-center [--workspace-titlebar-control-size:1rem] [&_button]:size-4 [&_svg]:size-3 [&_svg]:text-muted-foreground [&_button]:[-webkit-app-region:no-drag] [&_[aria-label=Back]]:order-first [&_[aria-label=Forward]]:order-last"
           : "left-[var(--workspace-controls-left)] ml-px",
         mobileSidebarSheetMounted && "hidden",
       )}
@@ -437,7 +437,7 @@ function SidebarControl({ showSidebar }: { readonly showSidebar: boolean }) {
     >
       {showSidebar ? (
         <div
-          className={cn("flex", stacked && "order-last")}
+          className="flex"
           inert={overviewShown}
           style={{
             ...overviewZoomTransition(),
@@ -469,8 +469,10 @@ function SidebarControl({ showSidebar }: { readonly showSidebar: boolean }) {
       {/* Phones keep the header for the page; the system back gesture covers them. */}
       <div
         className={cn(
-          "pointer-events-auto hidden items-center [-webkit-app-region:no-drag] md:flex",
-          stacked && "flex-col",
+          // Stacked, back and forward join the column so the toggle can sit between them.
+          stacked
+            ? "pointer-events-auto contents"
+            : "pointer-events-auto hidden items-center [-webkit-app-region:no-drag] md:flex",
         )}
       >
         <NavigationHistoryButton direction="back" onStageBackdrop={onStageBackdrop} />
