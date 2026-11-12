@@ -3349,6 +3349,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   <ComboboxTrigger
                     render={
                       <SidebarHeaderIconButton
+                        size={titleBarSearch ? "titlebar" : "header"}
                         label={
                           scopedProjectGroups.length > 0
                             ? `Filters: ${scopedProjectGroups.map((project) => project.displayName).join(", ")}`
@@ -3541,7 +3542,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           </SidebarGroup>
         }
       >
-        <SidebarGroup className="flex-1" role="presentation">
+        <SidebarGroup
+          // Title bar search: row contents line up with the traffic lights and the last header icon.
+          className={cn("flex-1", titleBarSearch && "-mx-[3px] w-[calc(100%+6px)]")}
+          role="presentation"
+        >
           {isSearchingThreads ? (
             threadSearchResults.length > 0 ? (
               <TooltipProvider

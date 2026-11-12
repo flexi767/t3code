@@ -64,7 +64,7 @@ export function SidebarThreadHeader({
         "flex items-center gap-1",
         // Centered on the chrome row above this group, right of the traffic lights.
         inTitleBar &&
-          "pointer-events-auto absolute top-[calc(var(--workspace-controls-top)+(var(--workspace-chrome-row-height)-1.75rem)/2-var(--workspace-chrome-row-height)+(--spacing(1)))] right-(--sidebar-content-inset) left-[var(--workspace-controls-left)] [-webkit-app-region:no-drag]",
+          "pointer-events-auto absolute top-[calc(var(--workspace-controls-top)+(var(--workspace-chrome-row-height)-1.75rem)/2-var(--workspace-chrome-row-height)+(--spacing(1)))] right-[calc(var(--sidebar-content-inset)+3px)] left-[calc(var(--workspace-controls-left)-6px)] [-webkit-app-region:no-drag]",
       )}
     >
       <InputGroup size="sidebar" className="min-w-0 flex-1">
@@ -133,16 +133,22 @@ export function SidebarThreadHeader({
         )}
       >
         {hasProjects ? projectScope : null}
-        <SidebarHeaderIconButton label="Add project" onClick={onNewProject}>
+        <SidebarHeaderIconButton
+          label="Add project"
+          size={inTitleBar ? "titlebar" : "header"}
+          onClick={onNewProject}
+        >
           <FolderPlusIcon />
         </SidebarHeaderIconButton>
         <SidebarHeaderIconButton
           label="New thread"
           tooltip={newThreadLabel}
+          size={inTitleBar ? "titlebar" : "header"}
           disabled={newThreadDisabled}
           onClick={onNewThread}
         >
-          <SquarePenIcon />
+          {/* Its square sits a pixel lower than its neighbours' glyphs. */}
+          <SquarePenIcon className={cn(inTitleBar && "-translate-y-px")} />
         </SidebarHeaderIconButton>
       </div>
     </div>
@@ -158,7 +164,7 @@ export function SidebarHeaderIconButton({
   ...rest
 }: {
   label: string;
-  size?: "header" | "footer";
+  size?: "header" | "titlebar" | "footer";
   tooltip?: ReactNode;
   className?: string | undefined;
   children?: ReactNode;
@@ -174,9 +180,14 @@ export function SidebarHeaderIconButton({
             size="icon"
             type="button"
             aria-label={label}
-            data-sidebar-header-control={size === "header" ? "" : undefined}
+            data-sidebar-header-control={size === "footer" ? undefined : ""}
             {...rest}
-            className={cn("relative shrink-0", size === "footer" ? "size-8" : "size-7", className)}
+            className={cn(
+              "relative shrink-0",
+              // Title bar controls sit a traffic-light gap apart (pen icons are 16px).
+              size === "footer" ? "size-8" : size === "titlebar" ? "size-[22px]" : "size-7",
+              className,
+            )}
           />
         }
       >
