@@ -437,7 +437,7 @@ function SidebarControl({ showSidebar }: { readonly showSidebar: boolean }) {
     >
       {showSidebar ? (
         <div
-          className="flex"
+          className={cn("flex", stacked && "order-last")}
           inert={overviewShown}
           style={{
             ...overviewZoomTransition(),

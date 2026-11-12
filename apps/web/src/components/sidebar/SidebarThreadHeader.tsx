@@ -102,7 +102,8 @@ export function SidebarThreadHeader({
               : undefined
           }
         />
-        {isSearching ? (
+        {/* Unfocused in the title bar, the query text gets the room instead. */}
+        {isSearching && (!inTitleBar || searchFocused) ? (
           <InputGroupAddon align="inline-end">
             {/* 2px in from the addon, so the 12px glyph centers 16px inside
                 the field like a row trailing glyph. */}
@@ -112,6 +113,8 @@ export function SidebarThreadHeader({
               variant="ghost-muted"
               className="me-0.5"
               aria-label="Clear thread search"
+              // Keeps focus in the field, so blur does not hide this button mid-click.
+              onMouseDown={(event) => event.preventDefault()}
               onClick={() => {
                 onClearSearch();
                 searchInputRef.current?.focus();
@@ -124,7 +127,10 @@ export function SidebarThreadHeader({
       </InputGroup>
       {/* Three 28px controls with 4px gaps (pen s8qVFu). */}
       <div
-        className={cn("flex shrink-0 items-center gap-1", inTitleBar && searchFocused && "hidden")}
+        className={cn(
+          "flex shrink-0 items-center",
+          inTitleBar ? searchFocused && "hidden" : "gap-1",
+        )}
       >
         {hasProjects ? projectScope : null}
         <SidebarHeaderIconButton label="Add project" onClick={onNewProject}>
