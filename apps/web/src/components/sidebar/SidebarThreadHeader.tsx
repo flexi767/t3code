@@ -147,8 +147,8 @@ export function SidebarThreadHeader({
           disabled={newThreadDisabled}
           onClick={onNewThread}
         >
-          {/* Its square sits a pixel lower than its neighbours' glyphs. */}
-          <SquarePenIcon className={cn(inTitleBar && "-translate-y-px")} />
+          {/* Lines up with its neighbours' glyphs in the title bar. */}
+          <SquarePenIcon className={cn(inTitleBar && "translate-y-px")} />
         </SidebarHeaderIconButton>
       </div>
     </div>
