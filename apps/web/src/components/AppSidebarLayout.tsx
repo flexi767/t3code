@@ -427,7 +427,7 @@ function SidebarControl({ showSidebar }: { readonly showSidebar: boolean }) {
       className={cn(
         "pointer-events-none fixed top-[var(--workspace-controls-top)] z-50 flex h-[var(--workspace-topbar-height)] items-center",
         stacked
-          ? "left-[calc(var(--sidebar-width)+2px)] flex-col justify-center [--workspace-titlebar-control-size:1rem] [&_button]:size-4 [&_svg]:size-3"
+          ? "left-[calc(var(--sidebar-width)+2px)] flex-col justify-center [--workspace-titlebar-control-size:1rem] [&_button]:size-4 [&_svg]:size-3 [&_svg]:text-muted-foreground"
           : "left-[var(--workspace-controls-left)] ml-px",
         mobileSidebarSheetMounted && "hidden",
       )}
@@ -452,7 +452,9 @@ function SidebarControl({ showSidebar }: { readonly showSidebar: boolean }) {
                   variant={isSidebarVisible && stageBackdropVariant ? "media-navigation" : "ghost"}
                   className={cn(
                     "pointer-events-auto",
-                    isSidebarVisible && stageBackdropVariant && "relative top-auto translate-y-0",
+                    // The media variant centres itself absolutely; the stack needs it in flow.
+                    ((isSidebarVisible && stageBackdropVariant) || stacked) &&
+                      "relative top-auto translate-y-0",
                   )}
                   aria-label="Toggle main sidebar"
                 />
