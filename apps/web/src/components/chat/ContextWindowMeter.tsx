@@ -2,12 +2,14 @@ import { Button } from "../ui/button";
 import type { ContextWindowSnapshot } from "@t3tools/client-runtime/state/context-window";
 import { formatContextWindowTokens } from "~/lib/contextWindow";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
-import {
-  formatContextWindowCompactionMessage,
-  formatContextWindowCost,
-} from "./ContextWindowMeter.logic";
+import { formatContextWindowCompactionMessage } from "./compaction.logic";
 import { Minimize2Icon } from "lucide-react";
 import { composerFloatingLayerProps } from "./composerEventScope";
+
+function formatCost(cost: { readonly amount: number; readonly currency: string }): string {
+  const fractionDigits = Math.abs(cost.amount) > 0 && Math.abs(cost.amount) < 0.01 ? 4 : 2;
+  return `${cost.currency} ${cost.amount.toFixed(fractionDigits)}`;
+}
 
 function formatPercentage(value: number | null): string | null {
   if (value === null || !Number.isFinite(value)) {
@@ -21,13 +23,12 @@ function formatPercentage(value: number | null): string | null {
 
 export function ContextWindowMeter(props: {
   usage: ContextWindowSnapshot | null;
-  modelDisplayName?: string | null;
   onCompact?: (() => void) | undefined;
   compactDisabled?: boolean | undefined;
   compactDisabledReason?: string | null | undefined;
   compact?: boolean;
 }) {
-  const { modelDisplayName, onCompact, compactDisabled, compactDisabledReason } = props;
+  const { onCompact, compactDisabled, compactDisabledReason } = props;
   const missing = props.usage === null;
   const usage = props.usage ?? {
     usedPercentage: null,
@@ -178,13 +179,13 @@ export function ContextWindowMeter(props: {
             <div className="flex items-center justify-between gap-3 text-2xs leading-4">
               <span className="text-secondary-label">Cost</span>
               <span className="font-medium tabular-nums text-secondary-label">
-                {formatContextWindowCost(usage.cost)}
+                {formatCost(usage.cost)}
               </span>
             </div>
           ) : null}
           {usage.compactsAutomatically ? (
             <div className="mt-1 text-pretty text-secondary-label text-2xs font-medium">
-              {formatContextWindowCompactionMessage(modelDisplayName, usage.autoCompactThreshold)}
+              {formatContextWindowCompactionMessage(usage.autoCompactThreshold)}
             </div>
           ) : null}
           {onCompact ? (
@@ -213,8 +214,4 @@ export function ContextWindowMeter(props: {
       </PopoverPopup>
     </Popover>
   );
-}
-
-export function ContextWindowMeterPlaceholder() {
-  return <span aria-hidden="true" className="size-7 shrink-0" />;
 }

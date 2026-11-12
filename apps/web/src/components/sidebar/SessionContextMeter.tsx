@@ -24,11 +24,9 @@ import type { SidebarThreadSummary } from "../../types";
 export function SessionContextMeter({
   thread,
   driverKind,
-  modelLabel,
 }: {
   thread: SidebarThreadSummary;
   driverKind: ProviderDriverKind | null;
-  modelLabel: string;
 }) {
   const canRead = useEnvironmentScope(thread.environmentId, AuthDiagnosticsReadScope);
   const canOperate = useEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope);
@@ -90,7 +88,6 @@ export function SessionContextMeter({
     <ContextWindowMeter
       compact
       usage={usage}
-      modelDisplayName={modelLabel}
       onCompact={() => {
         void compact();
       }}
