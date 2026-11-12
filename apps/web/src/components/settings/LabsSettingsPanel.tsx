@@ -9,6 +9,7 @@ import { Switch } from "../ui/switch";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
+import { useSidebarTitleBarSearch } from "../sidebar/sidebarTitleBarSearch";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 import { useOptionalSettingsScope, useSettingsScope } from "./SettingsScopeContext";
 import { firstManagedDenial, usePrimaryManagedPolicy } from "~/state/managedPolicy";
@@ -78,16 +79,15 @@ function BoringSidebarRow() {
 }
 
 function SidebarTitleBarSearchRow() {
-  const settings = useScopedSettings();
-  const updateSettings = useUpdateScopedSettings();
+  const [titleBarSearch, setTitleBarSearch] = useSidebarTitleBarSearch();
   return (
     <SettingsRow
       {...searchableSetting("sidebar-title-bar-search")}
       description="Put thread search and the sidebar's buttons on the window's top row. The sidebar toggle and back and forward stack beside the first tab."
       control={
         <Switch
-          checked={settings.sidebarTitleBarSearch}
-          onCheckedChange={(checked) => updateSettings({ sidebarTitleBarSearch: Boolean(checked) })}
+          checked={titleBarSearch}
+          onCheckedChange={(checked) => setTitleBarSearch(Boolean(checked))}
           aria-label="Title bar search"
         />
       }

@@ -38,10 +38,10 @@ import {
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { cn, isMacPlatform } from "../lib/utils";
+import { useSidebarTitleBarSearch } from "./sidebar/sidebarTitleBarSearch";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import {
-  useClientSettings,
   useEnvironmentIdentificationMode,
   useHideWindowControlsWhenSidebarCollapsed,
 } from "../hooks/useSettings";
@@ -352,10 +352,8 @@ function SidebarControl({ showSidebar }: { readonly showSidebar: boolean }) {
   const mobileSidebarSheetMounted = useMobileSidebarSheetMounted();
   const isSidebarVisible = useSidebarVisibility();
   // Title bar search takes this row in the sidebar, so the controls stack beside the first tab.
-  const stacked =
-    useClientSettings((settings) => settings.sidebarTitleBarSearch) &&
-    isSidebarVisible &&
-    !isMobile;
+  const [titleBarSearch] = useSidebarTitleBarSearch();
+  const stacked = titleBarSearch && isSidebarVisible && !isMobile;
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const stageBackdropVariant = useSidebarStageBackdropVariant(environmentIdentificationMode);
   const shortcutLabel = shortcutLabelForCommand(keybindings, "sidebar.toggle", {
