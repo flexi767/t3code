@@ -46,6 +46,8 @@ import {
 } from "@t3tools/contracts";
 import { liveThoughtLine } from "@t3tools/client-runtime/work-log/presentation";
 import { resolveWorkGroupScrollAnchor } from "@t3tools/client-runtime/work-log/scroll-anchor";
+import * as Schema from "effect/Schema";
+import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { observeResize } from "~/lib/observeResize";
 import { tickTextContent } from "~/lib/tickTextContent";
 import { observeVisibleAnimation } from "../../lib/visibleAnimation";
@@ -58,6 +60,7 @@ import {
   useRef,
   useState,
   type ComponentProps,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
@@ -945,12 +948,26 @@ function WorkingWindowView({
   }
   const windowRef = useRef<HTMLDivElement>(null);
   const spacerRef = useRef<HTMLDivElement>(null);
+  const [savedHeight, setSavedHeight] = useLocalStorage(
+    WORKING_WINDOW_HEIGHT_STORAGE_KEY,
+    WORKING_WINDOW_COLLAPSED_HEIGHT,
+    Schema.Number,
+  );
+  const [dragHeight, setDragHeight] = useState<number | null>(null);
+  const dragRef = useRef<{ startY: number; startHeight: number } | null>(null);
+  const collapsedHeight = dragHeight ?? savedHeight;
+  const endDrag = () => {
+    if (dragRef.current === null) return;
+    dragRef.current = null;
+    if (dragHeight !== null) setSavedHeight(dragHeight);
+    setDragHeight(null);
+  };
   const [collapseClips, setCollapseClips] = useState(false);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads the expanded height before the collapse transition paints its first frame
   useLayoutEffect(() => {
     if (open) return;
-    setCollapseClips((windowRef.current?.scrollHeight ?? 0) > WORKING_WINDOW_COLLAPSED_HEIGHT);
-  }, [open]);
+    setCollapseClips((windowRef.current?.scrollHeight ?? 0) > collapsedHeight);
+  }, [open, collapsedHeight]);
   const { onWorkingHistoryCollapsing } = ctx;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- older items stay mounted, and the timeline stops following its end, until the collapse transition finishes
   useEffect(() => {
@@ -1026,12 +1043,14 @@ function WorkingWindowView({
         aria-label="Work history"
         className={cn(
           // The gap under the bar sits inside the window, so its fade reaches the hairline.
-          "flex min-w-0 flex-col justify-end gap-1 overflow-clip pt-2 transition-[height] duration-200 ease-out motion-reduce:transition-none",
+          "relative flex min-w-0 flex-col justify-end gap-1 overflow-clip pt-2 transition-[height] duration-200 ease-out motion-reduce:transition-none",
           open
             ? "[height:calc-size(auto,size)]"
-            : "[height:calc-size(auto,min(size,220px))] not-supports-[height:calc-size(auto,size)]:max-h-[220px]",
+            : "[height:calc-size(auto,min(size,var(--working-window-height)))] not-supports-[height:calc-size(auto,size)]:max-h-(--working-window-height)",
+          dragHeight !== null && "transition-none",
           !open && history !== null && collapseClips && "working-window-collapse-fade",
         )}
+        style={{ "--working-window-height": `${collapsedHeight}px` } as CSSProperties}
       >
         {history === null ? (
           <CollapsedWorkingWindow
@@ -1057,6 +1076,34 @@ function WorkingWindowView({
               <LiveActivityRow label={liveAnswerPreview ?? "Thinking"} iconName="brain" active />
             ) : null}
           </>
+        )}
+        {open ? null : (
+          // Dragging the bottom edge sets the height every collapsed working window uses.
+          <div
+            aria-hidden
+            className="absolute inset-x-0 bottom-0 z-10 h-1.5 cursor-row-resize touch-none any-pointer-coarse:h-4"
+            onPointerDown={(event) => {
+              if (event.button !== 0) return;
+              event.currentTarget.setPointerCapture(event.pointerId);
+              dragRef.current = {
+                startY: event.clientY,
+                startHeight: windowRef.current?.getBoundingClientRect().height ?? collapsedHeight,
+              };
+            }}
+            onPointerMove={(event) => {
+              const drag = dragRef.current;
+              if (drag === null) return;
+              const next = drag.startHeight + event.clientY - drag.startY;
+              setDragHeight(
+                Math.round(
+                  Math.min(Math.max(next, WORKING_WINDOW_MIN_HEIGHT), globalThis.innerHeight * 0.8),
+                ),
+              );
+            }}
+            onPointerUp={endDrag}
+            onPointerCancel={endDrag}
+            onLostPointerCapture={endDrag}
+          />
         )}
       </div>
     </WorkGroupViewCtx>
@@ -1139,7 +1186,7 @@ function CollapsedWorkingWindow({
     <div className="relative min-h-0 min-w-0 shrink-0">
       <ScrollArea
         ref={rootRef}
-        className="h-auto max-h-[212px]"
+        className="h-auto max-h-[calc(var(--working-window-height)-8px)]"
         scrollFade
         scrollFadePadding={false}
         chainVerticalScroll
@@ -1208,6 +1255,8 @@ function workingWindowItemIsLive(item: WorkingWindowItem | undefined): boolean {
 
 const WORKING_WINDOW_TAIL = 12;
 const WORKING_WINDOW_COLLAPSED_HEIGHT = 220;
+const WORKING_WINDOW_MIN_HEIGHT = 80;
+const WORKING_WINDOW_HEIGHT_STORAGE_KEY = "t3code:working-window-height";
 
 const WORKING_HISTORY_BATCH = 50;
 
