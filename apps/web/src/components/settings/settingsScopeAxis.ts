@@ -1,7 +1,9 @@
+import { fileBasename } from "@t3tools/shared/path";
 import type { SidebarProjectSnapshot } from "../../sidebarProjectGrouping";
 import type { EnvironmentPresentation } from "../../state/environments";
 import type { ResolvedSettingsScope, SettingsScopeSearch } from "./settingsScope";
 
+type ScopeCheckout = SidebarProjectSnapshot["memberProjects"][number];
 type ScopeEnvironment = Pick<EnvironmentPresentation, "environmentId" | "label" | "displayUrl">;
 
 export function settingsScopeEnvironmentAddress(environment: ScopeEnvironment) {
@@ -100,6 +102,36 @@ export function selectProjectAxis(search: SettingsScopeSearch, value: string): S
   if (value !== ALL_PROJECTS_VALUE) next.project = value;
   if (search.machine) next.machine = search.machine;
   return next;
+}
+
+/** Empty unless the selection spans several checkouts of one environment, which only this axis can split. */
+export function settingsScopeCheckoutChoices(
+  group: SidebarProjectSnapshot,
+  search: Pick<SettingsScopeSearch, "machine" | "checkout">,
+): readonly ScopeCheckout[] {
+  const selected = group.memberProjects.find(
+    (member) => member.physicalProjectKey === search.checkout,
+  );
+  const environmentId = search.machine ?? selected?.environmentId;
+  const members =
+    environmentId === undefined
+      ? group.memberProjects
+      : group.memberProjects.filter((member) => member.environmentId === environmentId);
+  return members.length > 1 &&
+    members.every((member) => member.environmentId === members[0]!.environmentId)
+    ? members
+    : [];
+}
+
+/** Repeated folder names fall back to the full path so the closed menu still identifies the checkout. */
+export function settingsScopeCheckoutLabel(
+  checkout: ScopeCheckout,
+  checkouts: readonly ScopeCheckout[],
+) {
+  const name = fileBasename(checkout.workspaceRoot);
+  return checkouts.filter((other) => fileBasename(other.workspaceRoot) === name).length > 1
+    ? checkout.workspaceRoot
+    : name;
 }
 
 export function selectSingleEnvironmentScope(

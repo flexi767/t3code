@@ -534,7 +534,7 @@ export function ReviewThreadCard({
       contentEditable={false}
       onPointerDown={(event) => event.stopPropagation()}
     >
-      <div className="flex items-center gap-2 text-meta text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-2 text-meta text-muted-foreground">
         {thread.isResolved ? (
           <CircleCheckIcon
             className={cn("size-3.5", thread.isResolved && "text-success-foreground")}

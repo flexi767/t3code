@@ -74,7 +74,7 @@ describe("ElectronProtocol", () => {
       const originalScript = yield* request("/app.js");
       assert.equal(yield* Effect.promise(() => originalScript.text()), "export default 1;");
       assert.equal((yield* request("/%2e%2e%2fsecret.txt")).status, 404);
-    }).pipe(Effect.provide(Layer.merge(layerProtocol, NodeServices.layer)), Effect.scoped),
+    }).pipe(Effect.provide(Layer.merge(layerProtocol, NodeServices.layer))),
   );
 
   it.effect("proxies the stable renderer origin to the current app server", () =>

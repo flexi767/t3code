@@ -356,6 +356,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
                 text={activeQuestion.question}
                 cwd={cwd}
                 threadRef={threadRef}
+                lineBreaks
                 className={cn("text-foreground", questionTextAlign)}
               />
             </ComposerRequestCard.Body>
@@ -367,22 +368,33 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
                   optimisticSingleSelect.optionValue === optionValue;
                 const isSelected =
                   isOptimisticallySelected || draftSelectedOptions?.[index] === true;
+                // The preview sits outside the button: it can hold links, and a click on a single-select option advances.
                 return (
-                  <QuestionOptionRow
-                    textAlign={questionTextAlign}
-                    key={`${activeQuestion.id}:${optionValue}`}
-                    label={option.label}
-                    description={
-                      option.description && option.description !== option.label
-                        ? option.description
-                        : null
-                    }
-                    multiSelect={activeQuestion.multiSelect === true}
-                    selected={isSelected}
-                    shortcutKey={index < 9 ? index + 1 : null}
-                    disabled={disabled || isResponding}
-                    onSelect={() => handleOptionSelection(activeQuestion.id, optionValue)}
-                  />
+                  <div key={`${activeQuestion.id}:${optionValue}`}>
+                    <QuestionOptionRow
+                      textAlign={questionTextAlign}
+                      label={option.label}
+                      description={
+                        option.description && option.description !== option.label
+                          ? option.description
+                          : null
+                      }
+                      multiSelect={activeQuestion.multiSelect === true}
+                      selected={isSelected}
+                      shortcutKey={index < 9 ? index + 1 : null}
+                      disabled={disabled || isResponding}
+                      onSelect={() => handleOptionSelection(activeQuestion.id, optionValue)}
+                    />
+                    {option.preview ? (
+                      <ChatMarkdown
+                        text={option.preview}
+                        cwd={cwd}
+                        threadRef={threadRef}
+                        lineBreaks
+                        className="ps-9 pe-2 pb-1.5 text-meta text-foreground/70 sm:ps-8"
+                      />
+                    ) : null}
+                  </div>
                 );
               })}
               {canWriteAnswer ? (

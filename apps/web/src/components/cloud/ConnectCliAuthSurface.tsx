@@ -13,6 +13,7 @@ import {
 } from "../../cloud/connectCliAuth";
 import { isElectron } from "../../env";
 import { resolveClerkSignInProps } from "../clerk/authRedirect";
+import { retryClerkLoad, useClerkLoadFailed } from "../clerk/clerkLoadFailure";
 import { Button } from "../ui/button";
 import { Kbd } from "../ui/kbd";
 import { Spinner } from "../ui/spinner";
@@ -47,6 +48,7 @@ export function ConnectCliAuthorizeSurface() {
   const [request] = useState(() => readConnectAuthorizeRequest(new URL(window.location.href)));
   const clerk = useClerk();
   const { isLoaded, isSignedIn } = useAuth();
+  const loadFailed = useClerkLoadFailed();
   const [redirecting, setRedirecting] = useState(false);
 
   const authorize = () => {
@@ -128,11 +130,17 @@ export function ConnectCliAuthorizeSurface() {
         <Button disabled={redirecting} onClick={cancel} size="sm" type="button" variant="secondary">
           Cancel
         </Button>
-        <Button autoFocus disabled={!isLoaded || redirecting} size="sm" type="submit">
-          {redirecting ? <Spinner /> : null}
-          {isSignedIn ? "Authorize" : "Sign in and authorize"}
-          {redirecting ? null : <Kbd>⏎</Kbd>}
-        </Button>
+        {loadFailed ? (
+          <Button onClick={retryClerkLoad} size="sm" type="button">
+            Retry sign-in
+          </Button>
+        ) : (
+          <Button autoFocus disabled={!isLoaded || redirecting} size="sm" type="submit">
+            {redirecting ? <Spinner /> : null}
+            {isSignedIn ? "Authorize" : "Sign in and authorize"}
+            {redirecting ? null : <Kbd>⏎</Kbd>}
+          </Button>
+        )}
       </form>
 
       <StandaloneCardNote>The terminal continues once you approve.</StandaloneCardNote>

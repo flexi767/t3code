@@ -62,7 +62,7 @@ function Main({
   );
 }
 
-/** A plain row under the card (environment, worktree, branch) with no surface of its own. */
+/** A row under the card (environment, worktree, branch); page-coloured glass hides the timeline scrolling behind it. */
 function ContextStrip({ className, ...props }: ComponentProps<"div">) {
   return (
     <div

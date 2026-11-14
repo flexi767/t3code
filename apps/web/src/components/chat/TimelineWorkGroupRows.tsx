@@ -10,6 +10,7 @@ import {
   TimelineRowCtx,
   type TimelineWorkEntry,
   WorkGroupViewCtx,
+  type WorkGroupViewedImage,
 } from "./timelineRowContext";
 import { V2SubagentGroup } from "./TimelineV2EventRow";
 import { TimelinePendingApprovalRow } from "./TimelinePendingApprovalRow";
@@ -44,10 +45,15 @@ import {
   type ToolActivityIcon,
   type OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
-import { liveThoughtLine } from "@t3tools/client-runtime/work-log/presentation";
+import {
+  liveThoughtLine,
+  resolveViewedImageAsset,
+  workEntriesViewedImagePaths,
+} from "@t3tools/client-runtime/work-log/presentation";
 import { resolveWorkGroupScrollAnchor } from "@t3tools/client-runtime/work-log/scroll-anchor";
 import * as Schema from "effect/Schema";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
+import { useAssetUrls } from "~/assets/assetUrls";
 import { observeResize } from "~/lib/observeResize";
 import { tickTextContent } from "~/lib/tickTextContent";
 import { observeVisibleAnimation } from "../../lib/visibleAnimation";
@@ -66,6 +72,7 @@ import {
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import { workEntryDisplayIndicatesToolFailure } from "../../session-logic";
 import ChatMarkdown from "../ChatMarkdown";
+import { assetMediaActionsSource } from "./ChatMarkdownMedia";
 import {
   Minimize2Icon,
   XIcon,
@@ -149,6 +156,7 @@ export const WorkGroupSection = memo(function WorkGroupSection({
         anchorKey={anchorKey}
         disclosureAnchorKey={disclosureAnchorKey}
         entries={nonEmptyEntries}
+        groupedEntries={groupedEntries}
         workspaceRoot={workspaceRoot}
       />
     );
@@ -173,9 +181,13 @@ export const WorkGroupSection = memo(function WorkGroupSection({
 });
 
 function WorkingTimer({ createdAt, clock = false }: { createdAt: string; clock?: boolean }) {
+  const { activeThreadEnvironmentId } = use(TimelineRowCtx);
   return (
     <span
-      ref={tickTextContent(() => formatWorkingTimerNow(createdAt, clock), true)}
+      ref={tickTextContent(
+        () => formatWorkingTimerNow(createdAt, activeThreadEnvironmentId, clock),
+        true,
+      )}
       className="tabular-nums"
     />
   );
@@ -184,15 +196,63 @@ function WorkingTimer({ createdAt, clock = false }: { createdAt: string; clock?:
 const compactWorkEntryHeight = 24;
 const expandedWorkEntryHeight = 28;
 
+// The thumbnail strip below the group is its own virtualized row, so the gallery an expanded
+// entry opens is built from the same entries rather than from the strip's mounted images.
+// The working window's entries are live, so their images do not page with a group's strip.
+const NO_VIEWED_IMAGES: ReadonlyArray<WorkGroupViewedImage> = [];
+
+function useWorkGroupViewedImages(
+  groupedEntries: ReadonlyArray<TimelineWorkEntry>,
+): ReadonlyArray<WorkGroupViewedImage> {
+  const { threadRef, workspaceRoot, activeThreadEnvironmentId } = use(TimelineRowCtx);
+  const viewed = threadRef
+    ? workEntriesViewedImagePaths(groupedEntries).flatMap((path) => {
+        const asset = resolveViewedImageAsset(path, {
+          threadId: threadRef.threadId,
+          workspaceRoot,
+        });
+        return asset ? [{ path, asset }] : [];
+      })
+    : [];
+  const environmentId = threadRef?.environmentId ?? activeThreadEnvironmentId;
+  const urls = useAssetUrls(
+    environmentId,
+    viewed.map(({ asset }) => asset.resource),
+  );
+  return viewed.map(({ path, asset }, index) => {
+    const url = urls[index];
+    if (!url) return { path, item: null };
+    const src = url + asset.srcFragment;
+    const name = asset.alt.trim() || "image";
+    return {
+      path,
+      item: {
+        src,
+        name,
+        actionsSource: assetMediaActionsSource({
+          environmentId,
+          resource: asset.resource,
+          kind: "image",
+          name: asset.alt || "image",
+          src,
+          workspaceRoot,
+        }),
+      },
+    };
+  });
+}
+
 function ExpandedWorkGroupEntries({
   anchorKey,
   disclosureAnchorKey,
   entries,
+  groupedEntries,
   workspaceRoot,
 }: {
   anchorKey: string;
   disclosureAnchorKey: string;
   entries: TimelineWorkEntry[];
+  groupedEntries: ReadonlyArray<TimelineWorkEntry>;
   workspaceRoot: string | undefined;
 }) {
   const {
@@ -219,8 +279,10 @@ function ExpandedWorkGroupEntries({
     });
   }
 
+  const viewedImages = useWorkGroupViewedImages(groupedEntries);
   const groupView = {
     state: viewState,
+    viewedImages,
     onToggleEntry: (collapsed: boolean, entryId: string) =>
       onToggleWorkEntry(disclosureAnchorKey, collapsed, entryId),
     onContentReady: (entryId: string) => onWorkEntryContentReady?.(disclosureAnchorKey, entryId),
@@ -473,13 +535,18 @@ function BackgroundWorktreeSetupChip({ snapshot }: { snapshot: WorktreeSetupSnap
 
 export function ThinkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "thinking" }> }) {
   const ctx = use(TimelineRowCtx);
-  const { isCompacting, isPreparingWorktree, liveAnswerPreview } = use(TimelineRowActivityCtx);
+  const { isCompacting, isPreparingWorktree, liveAnswerPreview, providerStartingLabel } =
+    use(TimelineRowActivityCtx);
   if (isPreparingWorktree || isCompacting) return <WorkLogRow label="" />;
   // A failed group keeps this disclosure while an approval waits, but nothing is thinking then.
   const live = ctx.pendingApprovals.size === 0;
   const { groupId } = row;
   const activity = (
-    <LiveActivityRow label={liveAnswerPreview ?? "Thinking"} iconName="brain" active={live} />
+    <LiveActivityRow
+      label={providerStartingLabel ?? row.label ?? liveAnswerPreview ?? "Thinking"}
+      iconName="brain"
+      active={live}
+    />
   );
   if (groupId === undefined) return activity;
   return (
@@ -1011,6 +1078,7 @@ function WorkingWindowView({
   // Entries opened in the history keep their state, and toggling one keeps the bar in place.
   const groupView = (() => ({
     state: workGroupViewState,
+    viewedImages: NO_VIEWED_IMAGES,
     onToggleEntry: (collapsed: boolean, entryId: string) =>
       onToggleWorkEntry("working-indicator-row", collapsed, entryId),
     onContentReady: (entryId: string) =>

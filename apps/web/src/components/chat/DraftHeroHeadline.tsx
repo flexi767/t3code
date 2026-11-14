@@ -20,7 +20,7 @@ import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useProjectPin } from "~/hooks/useProjectGroupUpdate";
 import { useNowMinute } from "~/hooks/useNowMinute";
 import { useScratchProject } from "~/hooks/useScratchProject";
-import { isTriagePrompt } from "~/hooks/useStartTriage";
+import { isTriagePrompt } from "@t3tools/shared/triagePrompt";
 import { useClientSettings } from "~/hooks/useSettings";
 import { hasExplicitComposerModelSelection } from "~/lib/chatThreadActions";
 import {

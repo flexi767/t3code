@@ -53,12 +53,36 @@ function ownsShortcut(id: symbol) {
     return phase !== "idle" && phase !== "error";
   });
   if (busy) return busy[0] === id;
-  // A focused text field wins over the pane it sits in (a comment editor in a chat).
   const focused =
-    entries.find(([, read]) => read().targetRef?.current?.contains(document.activeElement)) ??
-    entries.find(([, read]) => read().ownsFocus?.());
+    entries.find(([, read]) => read().ownsFocus?.()) ??
+    entries.find(([, read]) => read().targetRef?.current?.contains(document.activeElement));
   if (focused) return focused[0] === id;
   return entries.find(([, read]) => !read().targetRef && !read().ownsFocus)?.[0] === id;
+}
+
+const targetScope = (field: HTMLElement | null | undefined) =>
+  field?.closest('[role="dialog"]') ?? field;
+
+// Keys an outside editor (the preview guest) relays arrive on window, so remember their editor.
+const relayedFrom = new WeakMap<Event, symbol>();
+
+// Escape inside another shown dictation editor, or the dialog hosting it, belongs to that editor.
+// The editor itself is checked before dialogs, since one dialog can host several editors.
+function inOtherShortcutTarget(id: symbol, event: Event) {
+  const source = relayedFrom.get(event);
+  if (source) return source !== id;
+  const target = event.target;
+  if (!(target instanceof Node)) return false;
+  const own = shortcutTargets.get(id)?.().targetRef?.current;
+  const others = [...shortcutTargets]
+    .filter(([other]) => other !== id)
+    .map(([, read]) => read().targetRef?.current)
+    .filter((field): field is HTMLElement => !!field?.getClientRects().length);
+  for (const scope of [(field?: HTMLElement | null) => field, targetScope]) {
+    if (scope(own)?.contains(target)) return false;
+    if (others.some((field) => scope(field)?.contains(target))) return true;
+  }
+  return false;
 }
 
 export function useDictationShortcut(input: ShortcutInput) {
@@ -104,7 +128,8 @@ export function useDictationShortcut(input: ShortcutInput) {
       if (
         event.key === "Escape" &&
         (pressed.current !== null ||
-          (speech.state.phase !== "idle" && speech.state.phase !== "error"))
+          (speech.state.phase !== "idle" && speech.state.phase !== "error")) &&
+        !inOtherShortcutTarget(id.current, event)
       ) {
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -147,9 +172,13 @@ export function useDictationShortcut(input: ShortcutInput) {
       };
     };
     const onBlur = () => finish(null);
+    const relay = (event: KeyboardEvent) => {
+      relayedFrom.set(event, id.current);
+      window.dispatchEvent(event);
+    };
     const unsubscribe = subscribeKeys?.({
-      keydown: (event) => window.dispatchEvent(event),
-      keyup: (event) => window.dispatchEvent(event),
+      keydown: relay,
+      keyup: relay,
       blur: onBlur,
     });
     window.addEventListener("keydown", onKeyDown, true);

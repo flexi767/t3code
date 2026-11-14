@@ -139,7 +139,7 @@ function getSelectedTraits(
 ) {
   const caps = getProviderModelCapabilities(models, model, provider, includePlanAgent);
   const modelIsUnavailable =
-    provider === "opencode"
+    provider === "opencode" || provider === "cursor"
       ? !models.some((candidate) => candidate.slug === normalizeModelSlug(model, provider))
       : resolveSelectableModel(provider, model, models) === null;
   const descriptors = modelIsUnavailable

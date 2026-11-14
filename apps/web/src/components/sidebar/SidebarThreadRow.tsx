@@ -32,6 +32,7 @@ import {
   resolveThreadProviderStack,
 } from "@t3tools/client-runtime/state/models";
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
+import { toServerClock } from "@t3tools/client-runtime/clock";
 import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
@@ -99,6 +100,7 @@ import {
   shouldRecedeSidebarThread,
   resolveWorkingStartedAt,
   useRetainedValue,
+  withoutRemovedCheckout,
   useSidebarRowSubscriptionLease,
   setFileDragActive,
 } from "../Sidebar.logic";
@@ -171,18 +173,20 @@ function JumpHintBadge(props: { label: string }) {
 const JUMP_HINT_SLOT_CLASS_NAME =
   "[&>:not([data-jump-hint])]:invisible [&>:not([data-jump-hint])]:absolute";
 
-function WorkingDuration(props: { startedAt: string | null }) {
+function WorkingDuration(props: { environmentId: EnvironmentId; startedAt: string | null }) {
   const startedMs = props.startedAt !== null ? Date.parse(props.startedAt) : Number.NaN;
   if (Number.isNaN(startedMs)) return null;
-  return <WorkingDurationLabel startedMs={startedMs} />;
+  return <WorkingDurationLabel environmentId={props.environmentId} startedMs={startedMs} />;
 }
 
 // Self-ticking so only this span re-renders each second, not the whole row;
 // the shared tick lands every working row's update in the same frame.
-function WorkingDurationLabel(props: { startedMs: number }) {
+function WorkingDurationLabel(props: { environmentId: EnvironmentId; startedMs: number }) {
   const nowMs = useNowSecond();
   return (
-    <span className="tabular-nums">{formatWorkingDurationLabel(nowMs - props.startedMs)}</span>
+    <span className="tabular-nums">
+      {formatWorkingDurationLabel(toServerClock(props.environmentId, nowMs) - props.startedMs)}
+    </span>
   );
 }
 
@@ -228,6 +232,7 @@ function SidebarWokeLabel(props: { onDismiss: (event: ReactMouseEvent) => void }
 }
 
 function SidebarStatusLabel(props: {
+  environmentId: EnvironmentId;
   kind: SidebarV2TopStatusKind;
   label?: string | null;
   workingStartedAt: string | null;
@@ -246,7 +251,7 @@ function SidebarStatusLabel(props: {
       {!props.compact &&
       (props.kind === "working" || props.kind === "preparing" || props.kind === "waiting") ? (
         <span aria-hidden>
-          <WorkingDuration startedAt={props.workingStartedAt} />
+          <WorkingDuration environmentId={props.environmentId} startedAt={props.workingStartedAt} />
         </span>
       ) : null}
     </span>
@@ -675,7 +680,7 @@ type SidebarThreadRowProps = {
   onThreadActivate: (threadRef: ScopedThreadRef) => void;
   onStartRename: (threadRef: ScopedThreadRef, title: string) => void;
   onRenameTitleChange: (title: string) => void;
-  onCommitRename: (threadRef: ScopedThreadRef, title: string, originalTitle: string) => void;
+  onCommitRename: (threadRef: ScopedThreadRef, title: string) => void;
   onCancelRename: () => void;
   isRenaming: boolean;
   renamingTitle: string;
@@ -819,6 +824,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     JSON.stringify([thread.environmentId, gitCwd]),
     gitStatus.data,
   );
+  const checkoutThread = withoutRemovedCheckout(thread, visibleGitStatus);
   const pr = linkedPullRequestStatus?.pr ?? null;
   const supportsMultiplePullRequests = useSupportsMultiplePullRequests(thread.environmentId);
   const currentLinkedPr = supportsMultiplePullRequests
@@ -884,7 +890,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
 
   const detailsTooltip = (
     <SidebarThreadTooltip
-      thread={thread}
+      thread={checkoutThread}
       project={props.project}
       projectDisplayName={props.projectDisplayName}
       environmentLabel={props.environmentLabel}
@@ -1107,7 +1113,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
       <ThreadRenameInput
         title={renamingTitle}
         onTitleChange={onRenameTitleChange}
-        onCommit={() => onCommitRename(threadRef, renamingTitle, thread.title)}
+        onCommit={() => onCommitRename(threadRef, renamingTitle)}
         onCancel={onCancelRename}
       />
     ) : (
@@ -1258,7 +1264,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   // Only the trailing icons would remain, so the row moves them to the title line instead.
   const metaLineEmpty =
     variant !== "card" &&
-    !thread.branch &&
+    !checkoutThread.branch &&
     prBadge === null &&
     diff === null &&
     runningTerminalIds.length === 0;
@@ -1418,6 +1424,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                       <SidebarWokeLabel onDismiss={handleAcknowledgeWokeClick} />
                     ) : inFolder && topStatus ? (
                       <SidebarStatusLabel
+                        environmentId={thread.environmentId}
                         compact
                         kind={topStatus}
                         label={topStatusLabel}
@@ -1591,6 +1598,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                       <SidebarWokeLabel onDismiss={handleAcknowledgeWokeClick} />
                     ) : (
                       <SidebarStatusLabel
+                        environmentId={thread.environmentId}
                         kind={topStatus}
                         label={topStatusLabel}
                         workingStartedAt={
@@ -1765,6 +1773,7 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
     JSON.stringify([thread.environmentId, gitCwd]),
     gitStatus.data,
   );
+  const checkoutThread = withoutRemovedCheckout(thread, visibleGitStatus);
   const branchMismatch = resolveLocalCheckoutBranchMismatch({
     effectiveEnvMode: thread.worktreePath === null ? "local" : "worktree",
     activeWorktreePath: thread.worktreePath,
@@ -1881,7 +1890,7 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
           </span>
         </TooltipTrigger>
         <SidebarThreadTooltip
-          thread={thread}
+          thread={checkoutThread}
           project={props.project}
           projectDisplayName={props.projectDisplayName}
           environmentLabel={props.environmentLabel}

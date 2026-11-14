@@ -8,7 +8,9 @@ import {
 import { useState, type ReactNode } from "react";
 
 import { RelativeTime } from "~/components/RelativeTime";
+import { useClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
+import { formatFullTimestamp } from "~/timestampFormat";
 
 import { InlineButton } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
@@ -27,6 +29,7 @@ export function PullRequestCommentTime({
   createdAt: string;
   url: string | null;
 }) {
+  const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   return (
     <Tooltip>
       <TooltipTrigger
@@ -47,7 +50,7 @@ export function PullRequestCommentTime({
       </TooltipTrigger>
       <TooltipPopup>
         <span className="flex flex-col gap-0.5">
-          <span>{new Date(createdAt).toLocaleString()}</span>
+          <span>{formatFullTimestamp(createdAt, timestampFormat)}</span>
           {url ? <span>Open comment on host</span> : null}
         </span>
       </TooltipPopup>

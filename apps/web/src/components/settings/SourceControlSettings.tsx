@@ -1,4 +1,5 @@
 import { RefreshIcon } from "~/components/ui/refresh-icon";
+import { useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
 import { ChevronDownIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -13,7 +14,9 @@ import { useSettingsScope } from "./SettingsScopeContext";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 import { cn } from "../../lib/utils";
 import { useEnvironmentQuery } from "../../state/query";
+import { serverEnvironment } from "../../state/server";
 import { sourceControlEnvironment } from "../../state/sourceControl";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import {
@@ -26,6 +29,7 @@ import {
 } from "../ui/empty";
 import { Collapsible, CollapsibleContent } from "../ui/collapsible";
 import { Skeleton } from "../ui/skeleton";
+import { Switch } from "../ui/switch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 import { GitIcon, JujutsuIcon, type Icon } from "../Icons";
@@ -44,6 +48,7 @@ import {
 } from "./settingsLayout";
 import { searchableSetting, sourceControlHostSettingsSearchId } from "./settingsSearch";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
+import { isSourceControlProviderOffered } from "@t3tools/client-runtime/operations/projects";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { sourceControlIcon } from "~/sourceControlPresentation";
 
@@ -183,9 +188,16 @@ function itemSummary({
 
 function DiscoveryItemRow({
   item,
+  offered,
   children,
 }: {
   readonly item: VcsDiscoveryItem | SourceControlProviderDiscoveryItem;
+  /** A provider's switch chooses whether the project pickers offer it; a VCS switch only reports. */
+  readonly offered?: {
+    readonly checked: boolean;
+    readonly disabled: boolean;
+    readonly onChange: (checked: boolean) => void;
+  };
   readonly children?: ReactNode;
 }) {
   const version = optionLabel(item.version);
@@ -225,19 +237,36 @@ function DiscoveryItemRow({
           </span>
         }
         trailing={
-          hasDetails ? (
-            <Button
-              size="icon-xs"
-              variant="ghost-muted"
-              onClick={() => setIsExpanded((open) => !open)}
-              aria-expanded={isExpanded}
-              aria-label={`Toggle ${item.label} details`}
-            >
-              <ChevronDownIcon
-                className={cn("size-3.5 transition-transform", isExpanded && "rotate-180")}
-              />
-            </Button>
-          ) : null
+          <>
+            {offered ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Switch
+                      checked={offered.checked}
+                      disabled={offered.disabled}
+                      onCheckedChange={offered.onChange}
+                      aria-label={`Offer ${item.label} when adding or publishing a project`}
+                    />
+                  }
+                />
+                <TooltipPopup side="top">Offer when adding or publishing a project</TooltipPopup>
+              </Tooltip>
+            ) : null}
+            {hasDetails ? (
+              <Button
+                size="icon-xs"
+                variant="ghost-muted"
+                onClick={() => setIsExpanded((open) => !open)}
+                aria-expanded={isExpanded}
+                aria-label={`Toggle ${item.label} details`}
+              >
+                <ChevronDownIcon
+                  className={cn("size-3.5 transition-transform", isExpanded && "rotate-180")}
+                />
+              </Button>
+            ) : null}
+          </>
         }
       />
       {hasDetails ? (
@@ -337,6 +366,13 @@ export function SourceControlSettingsPanel() {
   const handleScan = () => {
     discovery.refresh();
   };
+  const offeredProviders = environment?.serverConfig?.settings.offeredSourceControlProviders;
+  const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
+    label: "save source control providers",
+  });
+  const canUpdateSettings = useAtomValue(
+    serverEnvironment.updateSettings.permissionAtom(environmentId),
+  );
   const hostSettingsPanel = (item: SourceControlProviderDiscoveryItem) => {
     const definition = sourceControlClients.find(item.kind);
     if (!definition?.settings || environmentId === null) return undefined;
@@ -453,7 +489,21 @@ export function SourceControlSettingsPanel() {
               headerAction={hasVersionControlSystems ? null : scanButton}
             >
               {result.sourceControlProviders.map((item) => (
-                <DiscoveryItemRow key={`provider:${item.kind}`} item={item}>
+                <DiscoveryItemRow
+                  key={`provider:${item.kind}`}
+                  item={item}
+                  offered={{
+                    checked: isSourceControlProviderOffered(offeredProviders, item.kind),
+                    disabled: !canUpdateSettings,
+                    onChange: (checked) =>
+                      void updateSettings({
+                        environmentId,
+                        input: {
+                          patch: { offeredSourceControlProviders: { [item.kind]: checked } },
+                        },
+                      }),
+                  }}
+                >
                   {hostSettingsPanel(item)}
                 </DiscoveryItemRow>
               ))}

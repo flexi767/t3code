@@ -4,6 +4,7 @@ import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { createThreadVisitTracker } from "@t3tools/client-runtime/state/thread-visits";
 import { type ScopedThreadRef } from "@t3tools/contracts";
 
+import { environmentCatalog } from "../../connection/catalog";
 import { useUiStateStore } from "../../uiStateStore";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { findLayoutTab, type LayoutTab } from "../../layout/layoutModel";
@@ -13,6 +14,7 @@ function makeVisitTracker() {
   return createThreadVisitTracker({
     dispatchedVisits: new Map(),
     threadShellAtom: environmentThreadShells.threadShellAtom,
+    sessionGenerationAtom: environmentCatalog.sessionGenerationAtom,
     visit: threadEnvironment.visit,
     markLocalVisit: (ref, visitedAt) =>
       useUiStateStore.getState().markThreadVisited(scopedThreadKey(ref), visitedAt),

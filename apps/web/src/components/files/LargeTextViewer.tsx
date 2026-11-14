@@ -9,6 +9,10 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 const FIRST_SCREEN_BYTES = 16 * 1024;
 
+function countLabel(count: number, noun: string) {
+  return `${count.toLocaleString()} ${noun}${count === 1 ? "" : "s"}`;
+}
+
 function firstScreen(text: string, delimiter: "," | "\t" | null, complete: boolean) {
   if (!text || text.includes("\0")) return [];
   const rows = delimiter
@@ -226,15 +230,14 @@ export default function LargeTextViewer(props: {
       >
         <Tooltip>
           <TooltipTrigger render={<span tabIndex={0} />}>
-            {Math.max(0, meta.count - (props.delimiter && meta.count ? 1 : 0)).toLocaleString()}{" "}
-            {props.delimiter ? "rows" : "lines"}
+            {props.delimiter
+              ? countLabel(Math.max(0, meta.count - 1), "row")
+              : countLabel(meta.count, "line")}
           </TooltipTrigger>
           <TooltipPopup>
             {props.delimiter ? (
               <>
-                <span className="block">
-                  {meta.count ? meta.columns.toLocaleString() : 0} columns
-                </span>
+                <span className="block">{countLabel(meta.count ? meta.columns : 0, "column")}</span>
                 <span className="block">{props.delimiter === "," ? "Comma" : "Tab"} separated</span>
               </>
             ) : null}

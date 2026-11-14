@@ -498,18 +498,26 @@ export default function ProjectScriptsControl({
               setActionsMenuOpen({ presentation, scripts: open, imports: false })
             }
           >
-            <MenuTrigger
-              render={
-                <ThreadDetailsControl
-                  size="icon-sm"
-                  variant="secondary"
-                  panel={false}
-                  aria-label="Script actions"
-                />
-              }
-            >
-              <ChevronDownIcon className="size-3" />
-            </MenuTrigger>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <MenuTrigger
+                    render={
+                      <ThreadDetailsControl
+                        size="icon-sm"
+                        variant="secondary"
+                        panel={false}
+                        aria-label="Script actions"
+                        data-toolbar-control=""
+                      />
+                    }
+                  />
+                }
+              >
+                <ChevronDownIcon className="size-3" />
+              </TooltipTrigger>
+              <TooltipPopup side="top">Script actions</TooltipPopup>
+            </Tooltip>
             <MenuPopup align="end" className="min-w-64">
               <MenuGroup>
                 <MenuGroupLabel>Project actions</MenuGroupLabel>

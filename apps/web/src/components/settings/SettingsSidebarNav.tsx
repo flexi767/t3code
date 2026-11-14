@@ -394,25 +394,20 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                 <div onKeyDown={handleSettingsSectionKeyDown} className="flex flex-col">
                   {SETTINGS_NAV_GROUPS.map((group, index) => (
                     <div
-                      key={group.heading ?? index}
+                      key={group.heading}
                       className="flex flex-col max-md:border-t max-md:border-sidebar-border max-md:pt-4 max-md:first:border-t-0 max-md:first:pt-0"
                     >
-                      {group.heading ? (
-                        <h3
-                          id={`settings-nav-group-${index}`}
-                          className={cn(
-                            "px-2 pt-3 pb-1.5 text-caption text-sidebar-muted-foreground",
-                            !compactSearchOpen && "max-md:sr-only",
-                          )}
-                        >
-                          {m(group.heading)}
-                        </h3>
-                      ) : null}
-                      {/* The heading stays outside the group it names so NVDA does not read the name twice. */}
-                      <div
-                        role="group"
-                        aria-labelledby={group.heading ? `settings-nav-group-${index}` : undefined}
+                      <h3
+                        id={`settings-nav-group-${index}`}
+                        className={cn(
+                          "px-2 pt-3 pb-1.5 text-caption text-sidebar-muted-foreground",
+                          group.headingHidden ? "sr-only" : !compactSearchOpen && "max-md:sr-only",
+                        )}
                       >
+                        {m(group.heading)}
+                      </h3>
+                      {/* The heading stays outside the group it names so NVDA does not read the name twice. */}
+                      <div role="group" aria-labelledby={`settings-nav-group-${index}`}>
                         <SidebarMenu size="compact">
                           {group.paths.map((to) => {
                             const Icon = SETTINGS_SECTION_ICONS[to];

@@ -115,7 +115,7 @@ export function AssistantCitationCommentEditor({
         </p>
       ) : null}
       <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
-        <TextFieldSpeechControls speech={speech} compact />
+        <TextFieldSpeechControls speech={speech} />
         {onViewSource ? (
           <Button
             variant="secondary"

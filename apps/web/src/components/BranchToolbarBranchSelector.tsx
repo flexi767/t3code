@@ -45,7 +45,7 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { vcsEnvironment } from "../state/vcs";
 import { cn } from "../lib/utils";
 import { THREAD_DETAILS_PANEL_ICON_CLASS } from "./chat/threadDetailsPanelStyles";
-import { ThreadDetailsPrRows } from "./chat/ThreadDetailsPrRows";
+import { ThreadDetailsThreadPrRows } from "./chat/ThreadDetailsPrRows";
 import type { ReactElement } from "react";
 import { createPortal } from "react-dom";
 import { parsePullRequestReference } from "@t3tools/client-runtime/pull-request-link-input";
@@ -65,11 +65,7 @@ import {
   sanitizeNewRefName,
   shouldIncludeBranchPickerItem,
 } from "./BranchToolbar.logic";
-import {
-  prStatusIndicator,
-  resolveDisplayedThreadPr,
-  useLinkedThreadPullRequest,
-} from "./ThreadStatusIndicators";
+import { resolveDisplayedThreadPr, useLinkedThreadPullRequest } from "./ThreadStatusIndicators";
 
 import { ComboboxItem, ComboboxTrigger } from "./ui/combobox";
 import { ComposerControl } from "./chat/ComposerControl";
@@ -736,17 +732,9 @@ export function BranchToolbarBranchSelector({
     ? resolveThreadCurrentPullRequestLink(serverThread?.pullRequests ?? [])
     : null;
   const displayedPr = linkedStatus?.pr ?? (currentLinkedPr === null ? branchPr : null);
-  const displayedPrStatus = prStatusIndicator(
-    displayedPr,
-    linkedStatus?.sourceControlProvider ?? branchStatusQuery.data?.sourceControlProvider,
-  );
   const prNumber = currentLinkedPr?.number ?? displayedPr?.number;
   const prUrl = currentLinkedPr?.url ?? displayedPr?.url;
   const openPrLink = useOpenPrLink(threadRef);
-  const panelPrLabel =
-    prNumber === undefined
-      ? ""
-      : `#${prNumber}${displayedPr?.title.trim() ? `: ${displayedPr.title}` : ""}`;
 
   function selectPickerItem(itemValue: string) {
     if (isInitialBranchesLoadPending || isBranchActionPending) return;
@@ -975,6 +963,8 @@ export function BranchToolbarBranchSelector({
               }
               className="min-w-0 max-w-full active:scale-100"
               disabled={isInitialBranchesLoadPending || isBranchActionPending}
+              // NVDA browse mode re-reads a combobox when its attributes change, not when its text does.
+              aria-label={`Branch: ${triggerLabel}`}
             >
               <GitBranchIcon
                 className={cn(
@@ -986,7 +976,12 @@ export function BranchToolbarBranchSelector({
                 {isActiveBranchResolving ? (
                   <Skeleton className="h-3 w-24" />
                 ) : (
-                  <MiddleTruncate value={triggerLabel} variant="cap-aligned" className="w-full" />
+                  <MiddleTruncate
+                    value={triggerLabel}
+                    variant="cap-aligned"
+                    className="w-full"
+                    aria-hidden
+                  />
                 )}
               </ComposerContextLabel>
               {displayMode === "toolbar" ? (
@@ -1005,20 +1000,11 @@ export function BranchToolbarBranchSelector({
         prRowsContainer !== null
           ? portalTo(
               prRowsContainer,
-              <ThreadDetailsPrRows
+              <ThreadDetailsThreadPrRows
                 threadRef={threadRef}
-                links={serverThread?.pullRequests ?? []}
-                currentLink={currentLinkedPr}
-                onOpenLink={openPrLink}
-                environmentId={environmentId}
-                pr={displayedPr}
-                number={prNumber}
-                reference={currentLinkedPr}
-                status={displayedPrStatus}
                 project={activeProject}
-                label={panelPrLabel}
-                openAriaLabel={prUrl ?? `Open ${sourceControlPresentation.terminology.singular}`}
-                onOpen={(event) => openPrLink(event, prUrl)}
+                branchPr={branchPr}
+                branchSourceControlProvider={branchStatusQuery.data?.sourceControlProvider}
                 onActed={() => branchStatusQuery.refresh()}
               />,
             )

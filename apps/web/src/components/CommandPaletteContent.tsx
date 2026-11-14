@@ -92,7 +92,7 @@ export function CommandPaletteContent({
           {children}
         </CommandPanel>
         <CommandFooter className="max-sm:flex-col max-sm:items-start">
-          <div className="flex items-center gap-3 max-sm:flex-wrap max-sm:gap-y-1.5">
+          <div className="flex min-w-0 items-center gap-3 max-sm:flex-wrap max-sm:gap-y-1.5">
             <KbdGroup>
               <Kbd>
                 <ArrowUpIcon />

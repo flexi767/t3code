@@ -264,6 +264,34 @@ export const AutoMergeRequest = Schema.Struct({
 })
 export interface AutoMergeRequest extends Schema.Struct.Type<typeof AutoMergeRequest.fields> {}
 
+/** Represents a 'removed_from_merge_queue' event on a given pull request. */
+export const RemovedFromMergeQueueEvent = Schema.Struct({
+  __typename: Schema.Literal("RemovedFromMergeQueueEvent"),
+  /** The Node ID of the RemovedFromMergeQueueEvent object */
+  id: Shared.ID,
+  /** Identifies the date and time when the object was created. */
+  createdAt: Shared.DateTime,
+  /** The reason this pull request was removed from the queue. */
+  reason: Schema.NullOr(Schema.String)
+})
+export interface RemovedFromMergeQueueEvent extends Schema.Struct.Type<typeof RemovedFromMergeQueueEvent.fields> {}
+
+/** An item in a pull request timeline */
+export const MergeQueueRemovalsNodesPullRequestTimelineItemsOther = Schema.Struct({
+  __typename: GraphQL.otherTypename<Shared.Typename.PullRequestTimelineItems>()(["RemovedFromMergeQueueEvent"])
+})
+export interface MergeQueueRemovalsNodesPullRequestTimelineItemsOther extends Schema.Struct.Type<typeof MergeQueueRemovalsNodesPullRequestTimelineItemsOther.fields> {}
+
+/** The connection type for PullRequestTimelineItems. */
+export const MergeQueueRemovalsPullRequestTimelineItemsConnection = Schema.Struct({
+  /** A list of nodes. */
+  nodes: Schema.NullOr(Schema.Array(Schema.NullOr(Schema.Union([
+    RemovedFromMergeQueueEvent,
+    MergeQueueRemovalsNodesPullRequestTimelineItemsOther
+  ]))))
+})
+export interface MergeQueueRemovalsPullRequestTimelineItemsConnection extends Schema.Struct.Type<typeof MergeQueueRemovalsPullRequestTimelineItemsConnection.fields> {}
+
 /** Represents a comparison between two commit revisions. */
 export const Comparison = Schema.Struct({
   /** The number of commits behind the base branch. */
@@ -456,6 +484,8 @@ export const PullRequestCoreRepositoryPullRequestPullRequest = Schema.Struct({
   ])),
   /** Returns the auto-merge request object if one exists for this pull request. */
   autoMergeRequest: Schema.NullOr(AutoMergeRequest),
+  /** A list of events, comments, commits, etc. associated with the pull request. */
+  mergeQueueRemovals: Schema.optionalKey(MergeQueueRemovalsPullRequestTimelineItemsConnection),
   /** Check if the current viewer can update this object. */
   viewerCanUpdate: Schema.Boolean,
   /** Did the viewer author this comment. */
@@ -502,10 +532,11 @@ export const PullRequestCore = GraphQL.query("PullRequestCore", {
       { name: "number", body: "Int!" },
       { name: "headRef", body: "String!" },
       { name: "required", body: "Boolean!" },
-      { name: "requestedReviewers", body: "Int!" }
+      { name: "requestedReviewers", body: "Int!" },
+      { name: "mergeQueue", body: "Boolean!" }
     ],
     selections: [
-      { name: "repository", body: ["(owner:$", "owner", " name:$", "name", "){mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed autoMergeAllowed viewerPermission pullRequest(number:$", "number", "){number title url body state isDraft mergeable mergeStateStatus reviewDecision additions deletions changedFiles createdAt updatedAt mergedAt closedAt headRefName baseRefName headRefOid isCrossRepository maintainerCanModify headRepositoryOwner{__typename login}headRepository{nameWithOwner viewerPermission}headRef{id}author{__typename login avatarUrl...on User{id name}}autoMergeRequest{mergeMethod}viewerCanUpdate viewerDidAuthor viewerCanUpdateBranch baseRef{compare(headRef:$", "headRef", "){behindBy}}reviewRequests(first:$", "requestedReviewers", "){nodes{requestedReviewer{__typename...on User{login name}...on Bot{login}...on Team{slug combinedSlug teamName:name teamAvatarUrl:avatarUrl}}}}labels(first:100){nodes{name color description}}commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename...", "CheckContext", "}pageInfo{hasNextPage endCursor}}}}}}}}"] }
+      { name: "repository", body: ["(owner:$", "owner", " name:$", "name", "){mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed autoMergeAllowed viewerPermission pullRequest(number:$", "number", "){number title url body state isDraft mergeable mergeStateStatus reviewDecision additions deletions changedFiles createdAt updatedAt mergedAt closedAt headRefName baseRefName headRefOid isCrossRepository maintainerCanModify headRepositoryOwner{__typename login}headRepository{nameWithOwner viewerPermission}headRef{id}author{__typename login avatarUrl...on User{id name}}autoMergeRequest{mergeMethod}mergeQueueRemovals:timelineItems(last:1 itemTypes:[REMOVED_FROM_MERGE_QUEUE_EVENT])@include(if:$", "mergeQueue", "){nodes{__typename...on RemovedFromMergeQueueEvent{id createdAt reason}}}viewerCanUpdate viewerDidAuthor viewerCanUpdateBranch baseRef{compare(headRef:$", "headRef", "){behindBy}}reviewRequests(first:$", "requestedReviewers", "){nodes{requestedReviewer{__typename...on User{login name}...on Bot{login}...on Team{slug combinedSlug teamName:name teamAvatarUrl:avatarUrl}}}}labels(first:100){nodes{name color description}}commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename...", "CheckContext", "}pageInfo{hasNextPage endCursor}}}}}}}}"] }
     ],
     fragments: [
       { name: "CheckContext", body: ["on StatusCheckRollupContext{__typename...on StatusContext{context state targetUrl createdAt description isRequired(pullRequestNumber:$", "number", ")@include(if:$", "required", ")}...on CheckRun{name status conclusion startedAt completedAt detailsUrl isRequired(pullRequestNumber:$", "number", ")@include(if:$", "required", ")checkSuite{workflowRun{workflow{name}}}}}"] }
@@ -517,7 +548,8 @@ export const PullRequestCore = GraphQL.query("PullRequestCore", {
     number: Shared.Int,
     headRef: Schema.String,
     required: Schema.Boolean,
-    requestedReviewers: Shared.Int
+    requestedReviewers: Shared.Int,
+    mergeQueue: Schema.Boolean
   },
   result: Schema.Struct({
     /** Lookup a given repository by the owner and repository name. */
@@ -1224,20 +1256,20 @@ export const ReviewRequestedEvent = Schema.Struct({
 export interface ReviewRequestedEvent extends Schema.Struct.Type<typeof ReviewRequestedEvent.fields> {}
 
 /** An item in a pull request timeline */
-export const PullRequestTimelineItemsOther = Schema.Struct({
+export const RequestEventsNodesPullRequestTimelineItemsOther = Schema.Struct({
   __typename: GraphQL.otherTypename<Shared.Typename.PullRequestTimelineItems>()(["ReviewRequestedEvent"])
 })
-export interface PullRequestTimelineItemsOther extends Schema.Struct.Type<typeof PullRequestTimelineItemsOther.fields> {}
+export interface RequestEventsNodesPullRequestTimelineItemsOther extends Schema.Struct.Type<typeof RequestEventsNodesPullRequestTimelineItemsOther.fields> {}
 
 /** The connection type for PullRequestTimelineItems. */
-export const PullRequestTimelineItemsConnection = Schema.Struct({
+export const RequestEventsPullRequestTimelineItemsConnection = Schema.Struct({
   /** A list of nodes. */
   nodes: Schema.NullOr(Schema.Array(Schema.NullOr(Schema.Union([
     ReviewRequestedEvent,
-    PullRequestTimelineItemsOther
+    RequestEventsNodesPullRequestTimelineItemsOther
   ]))))
 })
-export interface PullRequestTimelineItemsConnection extends Schema.Struct.Type<typeof PullRequestTimelineItemsConnection.fields> {}
+export interface RequestEventsPullRequestTimelineItemsConnection extends Schema.Struct.Type<typeof RequestEventsPullRequestTimelineItemsConnection.fields> {}
 
 /** A repository pull request. */
 export const ReviewerCandidatesRepositoryPullRequestPullRequest = Schema.Struct({
@@ -1248,7 +1280,7 @@ export const ReviewerCandidatesRepositoryPullRequestPullRequest = Schema.Struct(
   /** A list of reviewer suggestions based on commit history and past review comments. */
   suggestedReviewers: Schema.Array(Schema.NullOr(SuggestedReviewer)),
   /** A list of events, comments, commits, etc. associated with the pull request. */
-  requestEvents: PullRequestTimelineItemsConnection
+  requestEvents: RequestEventsPullRequestTimelineItemsConnection
 })
 export interface ReviewerCandidatesRepositoryPullRequestPullRequest extends Schema.Struct.Type<typeof ReviewerCandidatesRepositoryPullRequestPullRequest.fields> {}
 

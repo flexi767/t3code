@@ -891,8 +891,10 @@ export function SettingsSearchField({
         onKeyDown={(event) => {
           if (event.key !== "Escape") return;
           event.preventDefault();
-          if (value.length > 0) onChange("");
-          else event.currentTarget.blur();
+          if (value.length > 0) {
+            event.stopPropagation();
+            onChange("");
+          } else event.currentTarget.blur();
         }}
         placeholder={placeholder}
         aria-label={placeholder}

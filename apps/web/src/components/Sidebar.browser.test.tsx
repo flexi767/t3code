@@ -17,6 +17,8 @@ import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { __setClientSettingsForTests, getClientSettings } from "../hooks/useSettings";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
 import { useProjects, useQuietThreadShells } from "../state/entities";
+import { readEnvironmentScope, useEnvironmentScope } from "../state/session";
+import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import type { Project } from "../types";
 import Sidebar from "./Sidebar";
@@ -24,10 +26,16 @@ import { THREAD_JUMP_HINT_SHOW_DELAY_MS } from "./Sidebar.logic";
 import { SortableThreadRow } from "./sidebar/SidebarThreadRow";
 import { SidebarProvider } from "./ui/sidebar";
 
+vi.mock(import("../state/olderSettledShelf"), async (original) => {
+  const actual = await original();
+  return { ...actual, useOlderSettledShelf: vi.fn(actual.useOlderSettledShelf) };
+});
 vi.mock("../state/entities", { spy: true });
 vi.mock("../hooks/useHandleNewThread", { spy: true });
 vi.mock("../hooks/useThreadRouteTarget", { spy: true });
 vi.mock("./sidebar/SidebarThreadRow", { spy: true });
+vi.mock("../state/session", { spy: true });
+vi.mock("../state/use-orchestration-command", { spy: true });
 vi.mock(import("../state/server"), async (original) => {
   const { Atom } = await import("effect/reactivity");
   const { compileResolvedKeybindingsConfig } = await import("@t3tools/shared/keybindings");
@@ -176,6 +184,7 @@ describe("sidebar render isolation", () => {
       environmentId: activeProject.environmentId,
       threadId: threads[0]!.id,
     };
+    threads.unshift(threadShell(activeProject.id, 100));
     vi.mocked(useProjects).mockReturnValue([activeProject]);
     vi.mocked(useQuietThreadShells).mockReturnValue(threads);
     vi.mocked(useThreadRouteTarget).mockReturnValue({ kind: "server", threadRef: routeThreadRef });
@@ -234,4 +243,57 @@ describe("sidebar render isolation", () => {
     expect(rowRenders()).toBeGreaterThan(beforeRelease);
     expect(jumpLabelsSince(beforeRelease)).toEqual([]);
   });
+});
+
+describe("sidebar thread rename", () => {
+  // regression: #35151 an untouched rename wrote back the title it opened with over a newer one
+  it.each(["{Enter}", "{Tab}"])(
+    "ending an untouched rename with %s keeps a title that arrived while it was open",
+    async (finish) => {
+      const activeProject = project("active");
+      const routeThreadRef: ScopedThreadRef = {
+        environmentId: activeProject.environmentId,
+        threadId: ThreadId.make("thread-0"),
+      };
+      const shellTitled = (title: string) => ({ ...threadShell(activeProject.id, 0), title });
+      const updateMetadata = vi.fn().mockResolvedValue({ _tag: "Success" });
+      vi.mocked(useOrchestrationCommand).mockReturnValue(updateMetadata);
+      vi.mocked(readEnvironmentScope).mockReturnValue(true);
+      vi.mocked(useEnvironmentScope).mockReturnValue(true);
+      vi.mocked(useProjects).mockReturnValue([activeProject]);
+      vi.mocked(useQuietThreadShells).mockReturnValue([shellTitled("Fix the login redirect")]);
+      vi.mocked(useThreadRouteTarget).mockReturnValue({
+        kind: "server",
+        threadRef: routeThreadRef,
+      });
+      vi.mocked(useHandleNewThread).mockReturnValue({
+        activeDraftThread: null,
+        activeThread: null,
+        defaultProjectRef: {
+          environmentId: activeProject.environmentId,
+          projectId: activeProject.id,
+        },
+        defaultProjectFallbackReady: true,
+        handleNewThread: vi.fn().mockResolvedValue(null),
+        routeDraftId: null,
+        routeThreadRef,
+      });
+      const tree = () => (
+        <SidebarProvider>
+          <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+        </SidebarProvider>
+      );
+      await using screen = await render(tree());
+      await userEvent.dblClick(screen.getByText("Fix the login redirect").first());
+      const input = screen.getByRole("textbox", { name: "Thread title" });
+      await expect.element(input).toHaveValue("Fix the login redirect");
+
+      vi.mocked(useQuietThreadShells).mockReturnValue([shellTitled("Generated title")]);
+      await screen.rerender(tree());
+      await userEvent.keyboard(finish);
+
+      await expect.element(input).not.toBeInTheDocument();
+      expect(updateMetadata).not.toHaveBeenCalled();
+    },
+  );
 });

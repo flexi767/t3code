@@ -26,7 +26,12 @@ import {
   formatWorkingDurationLabel,
   resolveThreadWorkingStartedAt,
 } from "@t3tools/client-runtime/state/models";
-import { AuthOrchestrationOperateScope, type EnvironmentMachineKind } from "@t3tools/contracts";
+import {
+  AuthOrchestrationOperateScope,
+  type EnvironmentId,
+  type EnvironmentMachineKind,
+} from "@t3tools/contracts";
+import { toServerClock } from "@t3tools/client-runtime/clock";
 import type { SnoozePresetSetting } from "@t3tools/contracts/settings";
 import { canSnooze } from "@t3tools/client-runtime/state/thread-settled";
 import { threadChipCopyTarget } from "@t3tools/client-runtime/thread-reference";
@@ -170,7 +175,11 @@ const STATUS_PILL_BY_KIND: Record<
 };
 
 /** Only this text ticks, so a running thread re-renders one Text per second, not its row. */
-function WorkingPillTimer(props: { readonly startedAt: string; readonly className: string }) {
+function WorkingPillTimer(props: {
+  readonly environmentId: EnvironmentId;
+  readonly startedAt: string;
+  readonly className: string;
+}) {
   const startedMs = Date.parse(props.startedAt);
   const nowMs = useVisibleSecondClock(Number.isFinite(startedMs));
   return (
@@ -180,12 +189,13 @@ function WorkingPillTimer(props: { readonly startedAt: string; readonly classNam
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
     >
-      {formatWorkingDurationLabel(nowMs - startedMs)}
+      {formatWorkingDurationLabel(toServerClock(props.environmentId, nowMs) - startedMs)}
     </Text>
   );
 }
 
 function ThreadListV2StatusPill(props: {
+  readonly environmentId: EnvironmentId;
   readonly kind: ThreadListV2PillKind;
   readonly label?: string | null;
   readonly workingStartedAt: string | null;
@@ -208,7 +218,11 @@ function ThreadListV2StatusPill(props: {
         {props.label ?? pill.label}
       </Text>
       {(props.kind === "working" || props.kind === "waiting") && props.workingStartedAt !== null ? (
-        <WorkingPillTimer startedAt={props.workingStartedAt} className={pill.textClassName} />
+        <WorkingPillTimer
+          environmentId={props.environmentId}
+          startedAt={props.workingStartedAt}
+          className={pill.textClassName}
+        />
       ) : null}
     </View>
   );
@@ -1300,6 +1314,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             </Pressable>
           ) : pillKind !== null ? (
             <ThreadListV2StatusPill
+              environmentId={thread.environmentId}
               kind={pillKind}
               label={pillLabel}
               workingStartedAt={workingStartedAt}

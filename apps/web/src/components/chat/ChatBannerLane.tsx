@@ -8,7 +8,10 @@ import type {
 } from "@t3tools/contracts";
 import { type Dispatch, type SetStateAction, useState } from "react";
 import { getDefaultServerModel } from "../../providerModels";
-import { providerStatusBannerItem } from "./ProviderStatusBanner";
+import {
+  dismissProviderStatusBannerForSession,
+  providerStatusBannerItem,
+} from "./ProviderStatusBanner";
 import { dismissThreadErrorBannerForSession, threadErrorBannerItem } from "./ThreadErrorBanner";
 import {
   isLowLimitDismissed,
@@ -28,8 +31,7 @@ export function useChatBannerLane(input: {
   readonly usageLimitSources: UsageLimitSourceSnapshots;
   readonly canSwitchProvider: boolean;
   readonly providerStatus: ServerProvider | null;
-  readonly providerStatusBannerKey: string | null;
-  readonly setDismissedProviderStatusBannerKey: Dispatch<SetStateAction<string | null>>;
+  readonly providerStatusDismissalKey: string | null;
   readonly onOpenProviderSetup: (instanceId: ProviderInstanceId) => void;
   readonly onOpenTerminal: () => void;
   readonly onProviderModelSelect: (instanceId: ProviderInstanceId, model: string) => void;
@@ -51,8 +53,7 @@ export function useChatBannerLane(input: {
     usageLimitSources,
     canSwitchProvider,
     providerStatus,
-    providerStatusBannerKey,
-    setDismissedProviderStatusBannerKey,
+    providerStatusDismissalKey,
     onOpenProviderSetup,
     onOpenTerminal,
     onProviderModelSelect,
@@ -88,7 +89,7 @@ export function useChatBannerLane(input: {
   const providerItem = providerStatusBannerItem({
     environmentId,
     status: providerStatus,
-    onDismiss: () => setDismissedProviderStatusBannerKey(providerStatusBannerKey),
+    onDismiss: () => dismissProviderStatusBannerForSession(providerStatusDismissalKey),
     onOpenProviderSetup,
     onOpenTerminal,
   });
