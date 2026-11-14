@@ -365,6 +365,11 @@ from that machine's **Settings → Sharing & access**. An address you type alway
 needs a pasted code. From a terminal, use
 `t3 environment link <address> --pairing-code <code> --access <mode>`.
 
+A link's address must be https, a Tailscale address, or this machine, because
+the code and the link's token travel to it. For a machine on a network that
+encrypts by itself, such as WireGuard, add its host name to `peerHttpHosts` in
+this machine's `settings.json`, for example `"peerHttpHosts": ["m3", "k"]`.
+
 You can also ask an agent to link a machine by name, such as "delegate this to
 my vps". It shows a card in the thread where you pick the machine the same way
 and the access, then approve. An address the agent gives that this app does

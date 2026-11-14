@@ -653,6 +653,14 @@ it.effect("tells the agent to link again once the peer revokes the link or it ex
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
 
+it.effect("accepts plain http off this machine and the tailnet only for a listed host", () =>
+  Effect.gen(function* () {
+    expect(yield* PeerLinks.peerOrigin("http://M3:3773/pair", ["m3"])).toBe("http://m3:3773");
+    const unlisted = yield* PeerLinks.peerOrigin("http://k:3773", ["m3"]).pipe(Effect.flip);
+    expect(unlisted.message).toContain("plain http");
+  }),
+);
+
 it.effect(
   "refuses to link itself, plain http off this machine and the tailnet, or a peer that cannot hold a linked agent to its limits",
   () =>

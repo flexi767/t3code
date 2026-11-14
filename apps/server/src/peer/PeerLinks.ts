@@ -150,9 +150,10 @@ const failStorage = (cause: unknown) =>
 /**
  * The base URL a peer is reached at, normalised to its origin. The pairing
  * code and then the link's token travel to it, so plain http is accepted only
- * where the network already encrypts: this machine, or a Tailscale address.
+ * where the network already encrypts: this machine, a Tailscale address, or a
+ * host the user listed in `peerHttpHosts`.
  */
-const peerOrigin = (url: string) => {
+export const peerOrigin = (url: string, httpHosts: ReadonlyArray<string>) => {
   const parsed = URL.parse(url);
   if (parsed === null || (parsed.protocol !== "https:" && parsed.protocol !== "http:")) {
     return Effect.fail(
@@ -165,7 +166,8 @@ const peerOrigin = (url: string) => {
   if (
     parsed.protocol === "http:" &&
     !isLocalLoopbackHost(parsed.hostname) &&
-    !isTailnetHost(parsed.hostname)
+    !isTailnetHost(parsed.hostname) &&
+    !httpHosts.some((host) => host.toLowerCase() === parsed.hostname)
   ) {
     return Effect.fail(
       new PeerLinkError({
@@ -232,6 +234,12 @@ const make = Effect.gen(function* () {
     Effect.map((settings) => settings.linkedEnvironmentsEnabled),
     Effect.orElseSucceed(() => false),
   );
+  const checkedOrigin = (url: string) =>
+    serverSettings.getSettings.pipe(
+      Effect.map((settings) => settings.peerHttpHosts),
+      Effect.orElseSucceed((): ReadonlyArray<string> => []),
+      Effect.flatMap((httpHosts) => peerOrigin(url, httpHosts)),
+    );
 
   /** A fresh name for one link's token; the row records it. */
   const newSecretName = random.randomBytes(16).pipe(
@@ -437,7 +445,7 @@ const make = Effect.gen(function* () {
       urls,
       (url) =>
         Effect.gen(function* () {
-          const origin = yield* peerOrigin(url);
+          const origin = yield* checkedOrigin(url);
           // Loopback is this machine, where anything may answer as the one picked.
           if (isOwnLoopback(new URL(origin).hostname)) {
             return yield* new PeerLinkError({
@@ -476,7 +484,7 @@ const make = Effect.gen(function* () {
 
   /** The peer at `url`, with every address checked for credentials first. */
   const answeringAt = Effect.fn("PeerLinks.answeringAt")(function* (urls: ReadonlyArray<string>) {
-    const origins = yield* Effect.forEach(urls, peerOrigin);
+    const origins = yield* Effect.forEach(urls, checkedOrigin);
     const primary = origins[0]!;
     return { primary, peer: yield* probe(primary), origins };
   });
