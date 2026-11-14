@@ -192,6 +192,8 @@ const decodeCodexSessionIndexEntry = Schema.decodeUnknownOption(
 );
 
 type DecodedTranscriptRecord = typeof TranscriptRecord.Type;
+// A record's place in its whole file, so a refresh names messages the same however much was read.
+const transcriptRecordPositions = new WeakMap<DecodedTranscriptRecord, number>();
 
 interface AgentSessionTranscriptMetadata {
   readonly source: AgentSessionSource;
@@ -272,18 +274,22 @@ interface MetadataReadBudget {
   operationsRemaining: number;
   recordsRemaining: number;
   truncated: boolean;
+  readonly multiplier: number;
 }
 
-function selectMetadataTranscripts(transcripts: ReadonlyArray<TranscriptCandidate>) {
+function selectMetadataTranscripts(
+  transcripts: ReadonlyArray<TranscriptCandidate>,
+  limit = MAX_TRANSCRIPTS_PER_SOURCE,
+) {
   const selected: Array<TranscriptCandidate> = [];
   let pending = Array.from(
     Map.groupBy(transcripts, (transcript) => transcript.providerInstanceId).values(),
     (entries) => entries.values(),
   );
-  while (pending.length > 0 && selected.length < MAX_TRANSCRIPTS_PER_SOURCE) {
+  while (pending.length > 0 && selected.length < limit) {
     const nextRound: typeof pending = [];
     for (const iterator of pending) {
-      if (selected.length === MAX_TRANSCRIPTS_PER_SOURCE) break;
+      if (selected.length === limit) break;
       const next = iterator.next();
       if (next.done) continue;
       selected.push(next.value);
@@ -443,7 +449,12 @@ export function parseAgentSessionTranscript(
   lines = splitTranscriptRecords(input.contents, MAX_IMPORT_RECORDS + 1),
 ): AgentSessionThread | null {
   if (lines.length > MAX_IMPORT_RECORDS) return null;
-  const records = lines.flatMap((line) => Option.toArray(decodeTranscriptRecord(line)));
+  const records = lines.flatMap((line, position) =>
+    Option.toArray(decodeTranscriptRecord(line)).map((record) => {
+      transcriptRecordPositions.set(record, position);
+      return record;
+    }),
+  );
   const claudeFields =
     input.source === "claudeAgent"
       ? records.reduce(foldClaudeFields, emptyClaudeFields)
@@ -565,6 +576,7 @@ function parseAgentSessionRecords(
   let recordIndex = -1;
   for (const record of input.source === "pi" ? activePiBranch(records) : records) {
     recordIndex += 1;
+    const sourcePosition = transcriptRecordPositions.get(record) ?? recordIndex;
     if (input.source === "pi") {
       if (!isPiConversationRecord(record)) continue;
       const text = extractText(record.message.content);
@@ -573,7 +585,7 @@ function parseAgentSessionRecords(
         role: record.message.role,
         text,
         createdAt: normalizeTimestamp(record.timestamp, fallbackTimestamp),
-        sourcePosition: recordIndex,
+        sourcePosition,
         codexResponseUser: false,
       });
       continue;
@@ -587,7 +599,7 @@ function parseAgentSessionRecords(
         role: record.type,
         text,
         createdAt: normalizeTimestamp(record.timestamp, fallbackTimestamp),
-        sourcePosition: recordIndex,
+        sourcePosition,
         codexResponseUser: false,
       });
       continue;
@@ -623,7 +635,7 @@ function parseAgentSessionRecords(
         role: "user",
         text,
         createdAt: normalizeTimestamp(record.timestamp, fallbackTimestamp),
-        sourcePosition: recordIndex,
+        sourcePosition,
         codexResponseUser: false,
       });
       continue;
@@ -648,7 +660,7 @@ function parseAgentSessionRecords(
       role: record.payload.role,
       text: extractedText,
       createdAt: normalizeTimestamp(record.timestamp, fallbackTimestamp),
-      sourcePosition: recordIndex,
+      sourcePosition,
       codexResponseUser: record.payload.role === "user",
     });
   }
@@ -1148,10 +1160,10 @@ export const make = Effect.gen(function* () {
             let remaining = "";
             let bytesRead = 0;
             let recordsRead = 0;
-            const maxBytes = Math.min(MAX_TRANSCRIPT_SCAN_BYTES, size);
+            const maxBytes = Math.min(MAX_TRANSCRIPT_SCAN_BYTES * budget.multiplier, size);
             const reserveRecord = () => {
               if (
-                recordsRead === MAX_METADATA_RECORDS_PER_TRANSCRIPT ||
+                recordsRead === MAX_METADATA_RECORDS_PER_TRANSCRIPT * budget.multiplier ||
                 budget.recordsRemaining === 0
               ) {
                 budget.truncated = true;
@@ -1260,6 +1272,7 @@ export const make = Effect.gen(function* () {
                 // Pi accepts messages this schema rejects, such as null content; keep their tree links.
                 records.push(...Option.toArray(decodePiEntryLinks(value)));
               } else if (Option.isSome(decoded)) {
+                transcriptRecordPositions.set(decoded.value, recordCount - 1);
                 if (Option.isNone(cwd)) cwd = Option.fromNullOr(extractDecodedCwd(decoded.value));
                 if (source === "claudeAgent") {
                   claudeFields = foldClaudeFields(claudeFields, decoded.value);
@@ -1670,7 +1683,9 @@ export const make = Effect.gen(function* () {
     }));
   });
 
-  const collectCandidates = Effect.fn("AgentSessionScanner.collectCandidates")(function* () {
+  const collectCandidates = Effect.fn("AgentSessionScanner.collectCandidates")(function* (
+    multiplier = 1,
+  ) {
     const settings = yield* serverSettings.getSettings.pipe(
       Effect.mapError((cause) => new AgentSessionScanError({ operation: "read-settings", cause })),
     );
@@ -1774,9 +1789,10 @@ export const make = Effect.gen(function* () {
 
       const transcriptCandidates: Array<TranscriptCandidate> = [];
       const baseOperationBudget = Math.floor(
-        MAX_DISCOVERY_OPERATIONS_PER_SOURCE / Math.max(1, homes.length),
+        (MAX_DISCOVERY_OPERATIONS_PER_SOURCE * multiplier) / Math.max(1, homes.length),
       );
-      const extraOperationBudgets = MAX_DISCOVERY_OPERATIONS_PER_SOURCE % Math.max(1, homes.length);
+      const extraOperationBudgets =
+        (MAX_DISCOVERY_OPERATIONS_PER_SOURCE * multiplier) % Math.max(1, homes.length);
       for (const [index, home] of homes.entries()) {
         const operationBudget = baseOperationBudget + (index < extraOperationBudgets ? 1 : 0);
         if (operationBudget === 0) {
@@ -1798,15 +1814,19 @@ export const make = Effect.gen(function* () {
         (left, right) =>
           right.mtimeMs - left.mtimeMs || left.filePath.localeCompare(right.filePath),
       );
-      if (transcriptCandidates.length > MAX_TRANSCRIPTS_PER_SOURCE) {
+      if (transcriptCandidates.length > MAX_TRANSCRIPTS_PER_SOURCE * multiplier) {
         truncated = true;
       }
-      const selectedTranscripts = selectMetadataTranscripts(transcriptCandidates);
+      const selectedTranscripts = selectMetadataTranscripts(
+        transcriptCandidates,
+        MAX_TRANSCRIPTS_PER_SOURCE * multiplier,
+      );
       const metadataBudget: MetadataReadBudget = {
-        bytesRemaining: MAX_METADATA_BYTES_PER_SOURCE,
-        operationsRemaining: MAX_METADATA_OPERATIONS_PER_SOURCE,
-        recordsRemaining: MAX_METADATA_RECORDS_PER_SOURCE,
+        bytesRemaining: MAX_METADATA_BYTES_PER_SOURCE * multiplier,
+        operationsRemaining: MAX_METADATA_OPERATIONS_PER_SOURCE * multiplier,
+        recordsRemaining: MAX_METADATA_RECORDS_PER_SOURCE * multiplier,
         truncated: false,
+        multiplier,
       };
       raw.push(
         ...(yield* groupTranscriptsByCwd(
@@ -1824,9 +1844,13 @@ export const make = Effect.gen(function* () {
 
   let cachedCandidates: Effect.Success<ReturnType<typeof collectCandidates>> | null = null;
 
+  // Refreshing a partial scan searches farther without removing the normal startup bounds.
+  // Keep retries finite even for corrupt transcripts or an exceptionally large session archive.
+  let scanMultiplier = 1;
   const scan: AgentSessionScanner["Service"]["scan"] = Effect.gen(function* () {
-    cachedCandidates = yield* collectCandidates();
+    cachedCandidates = yield* collectCandidates(scanMultiplier);
     const { candidates: raw, truncated } = cachedCandidates;
+    if (truncated) scanMultiplier = Math.min(scanMultiplier * 2, 16);
 
     const merged = new Map<
       string,
@@ -1935,7 +1959,7 @@ export const make = Effect.gen(function* () {
 
     // Imports recorded since a budget-truncated collection can free budget for transcripts it cut off.
     if (cachedCandidates === null || cachedCandidates.metadataTruncated) {
-      cachedCandidates = yield* collectCandidates();
+      cachedCandidates = yield* collectCandidates(scanMultiplier);
     }
     const { candidates } = cachedCandidates;
 
