@@ -537,6 +537,17 @@ struct SwitchPaths {
     backup: PathBuf,
     launcher: PathBuf,
     runtime: PathBuf,
+    state: PathBuf,
+}
+/// A service from upstream's `t3 service install` runs a launcher that serves this file's
+/// `activeVersion`, whatever version its unit names.
+fn launcher_state_with_version(original: &str, ver: &str) -> Result<String> {
+    let mut state: Value = serde_json::from_str(original)?;
+    if state.get("update").is_some() {
+        return Err("The service launcher has an update in progress".into());
+    }
+    state["activeVersion"] = ver.into();
+    Ok(format!("{}\n", serde_json::to_string_pretty(&state)?))
 }
 /// Stops first so the backup can't miss what graceful shutdown records for restart continuation.
 /// A version that never comes up gets the previous service, launcher and database back.
@@ -544,8 +555,16 @@ fn switch_service(ver: &str, paths: &SwitchPaths, control: &impl ServiceControl)
     let original = fs::read_to_string(&paths.service)?;
     let (replacement, previous) = service_with_version(&original, ver)?;
     let previous_link = fs::read_link(&paths.launcher).ok();
+    let original_state = fs::read_to_string(&paths.state).ok();
+    let state_replacement = original_state
+        .as_deref()
+        .map(|state| launcher_state_with_version(state, ver))
+        .transpose()?;
     // A helper that died mid-switch leaves the new definition behind with nothing running.
     if previous == ver {
+        if let Some(state) = &state_replacement {
+            fs::write(&paths.state, state)?;
+        }
         link_at(&paths.launcher, &paths.runtime.join("t3"))?;
         control.start()?;
         if control.verify(ver).is_ok() {
@@ -565,6 +584,9 @@ fn switch_service(ver: &str, paths: &SwitchPaths, control: &impl ServiceControl)
             .join(paths.service.file_name().ok_or("Service filename")?),
     )?;
     fs::write(&paths.service, replacement)?;
+    if let Some(state) = &state_replacement {
+        fs::write(&paths.state, state)?;
+    }
     link_at(&paths.launcher, &paths.runtime.join("t3"))?;
     let failure = match control.start().and_then(|()| control.verify(ver)) {
         Ok(()) => return Ok(()),
@@ -576,6 +598,9 @@ fn switch_service(ver: &str, paths: &SwitchPaths, control: &impl ServiceControl)
     })?;
     restore_database(&paths.db, &paths.backup)?;
     fs::write(&paths.service, original)?;
+    if let Some(state) = original_state {
+        fs::write(&paths.state, state)?;
+    }
     if let Some(link) = previous_link {
         link_at(&paths.launcher, &link)?;
     }
@@ -602,6 +627,7 @@ fn activate(ver: &str, force: bool) -> Result<()> {
             backup: backup_dir(ver)?,
             launcher: home()?.join(".local/bin/t3"),
             runtime: runtime(ver)?,
+            state: home()?.join(".t3/runtime/service-state.json"),
         },
         &InstalledService,
     )
@@ -636,14 +662,20 @@ fn verify(ver: &str) -> Result<()> {
         thread::sleep(Duration::from_secs(2));
     }
 }
-// An unreachable M3 can be left behind; its next rollout must use a new version.
-fn remote_hosts() -> &'static [&'static str] {
-    if env::var_os("T3CODE_FLEET_SKIP_M3").is_some() {
-        &["j"]
-    } else {
-        &["m3", "j"]
-    }
+// An unreachable M3 or K can be left behind; its next rollout must use a new version.
+fn remote_hosts() -> Vec<&'static str> {
+    [
+        ("m3", "T3CODE_FLEET_SKIP_M3"),
+        ("j", ""),
+        ("k", "T3CODE_FLEET_SKIP_K"),
+    ]
+    .into_iter()
+    .filter(|(_, skip)| skip.is_empty() || env::var_os(skip).is_none())
+    .map(|(host, _)| host)
+    .collect()
 }
+/// Linux hosts without a Rust toolchain run the helper J compiled.
+const HELPER_FROM_J: &[&str] = &["k"];
 fn route(host: &str) -> String {
     if host == "m3" {
         env::var("T3CODE_FLEET_M3_SSH_HOST").unwrap_or_else(|_| host.into())
@@ -713,9 +745,25 @@ fn prepare_helpers(ver: &str) -> Result<String> {
         "set -e; for tc in \"$HOME\"/.rustup/toolchains/*; do if [ -x \"$tc/bin/cargo\" ]; then export PATH=\"$tc/bin:$PATH\"; break; fi; done; cargo build --locked --release --manifest-path {}",
         quote(&format!("{directory}/Cargo.toml"))
     );
-    for host in remote_hosts() {
+    let hosts = remote_hosts();
+    for host in hosts.iter().filter(|host| !HELPER_FROM_J.contains(host)) {
         println!("Compiling deployment helper on {host}");
         println!("{}", ssh(host, &compile)?);
+    }
+    for host in hosts.iter().filter(|host| HELPER_FROM_J.contains(host)) {
+        println!("Copying deployment helper from j to {host}");
+        ssh(
+            host,
+            &format!("mkdir -p {}", quote(&format!("{directory}/target/release"))),
+        )?;
+        ssh(
+            "j",
+            &format!(
+                "scp -q -o BatchMode=yes {} {}",
+                quote(&helper),
+                quote(&format!("{host}:{helper}"))
+            ),
+        )?;
     }
     Ok(helper)
 }
@@ -741,33 +789,52 @@ fn distribute(ver: &str, builds: &Path, stage_only: bool, activation: Activation
                 &format!("j:{destination}"),
             ],
         )?;
-        let host = if platform == "darwin-arm64" {
-            "m3"
+        let hosts: Vec<&str> = if platform == "darwin-arm64" {
+            vec!["m3"]
         } else {
-            "j"
+            remote_hosts()
+                .into_iter()
+                .filter(|host| *host != "m3")
+                .collect()
         };
-        if host == "m3" {
-            ssh(
+        for host in hosts {
+            if host == "m3" {
+                ssh(
+                    host,
+                    &format!(
+                        "rsync -azc --whole-file --partial --inplace -e {} {} /tmp/",
+                        quote(transport),
+                        quote(&format!("j:{destination}"))
+                    ),
+                )?;
+            } else if host != "j" {
+                run(
+                    "rsync",
+                    &[
+                        "-azc",
+                        "--whole-file",
+                        "--partial",
+                        "--inplace",
+                        "-e",
+                        transport,
+                        s(&archive),
+                        &format!("{host}:{destination}"),
+                    ],
+                )?;
+            }
+            let remote_hash = ssh(
                 host,
-                &format!(
-                    "rsync -azc --whole-file --partial --inplace -e {} {} /tmp/",
-                    quote(transport),
-                    quote(&format!("j:{destination}"))
-                ),
+                &format!("{} hash --archive {}", quote(&helper), quote(&destination)),
+            )?;
+            if remote_hash != digest(&archive)? {
+                return Err(format!("{host}: archive checksum mismatch").into());
+            }
+            remote(
+                host,
+                &helper,
+                &["host-stage", "--version", ver, "--archive", &destination],
             )?;
         }
-        let remote_hash = ssh(
-            host,
-            &format!("{} hash --archive {}", quote(&helper), quote(&destination)),
-        )?;
-        if remote_hash != digest(&archive)? {
-            return Err(format!("{host}: archive checksum mismatch").into());
-        }
-        remote(
-            host,
-            &helper,
-            &["host-stage", "--version", ver, "--archive", &destination],
-        )?;
     }
     stage(ver, &builds.join("fleet-darwin-arm64.tar"))?;
     // J's /tmp is RAM-backed; a staged runtime no longer needs its archive.
@@ -958,7 +1025,7 @@ fn activate_fleet(ver: &str, builds: &Path, helper: &str, force: bool) -> Result
         builds.join("fleet-complete.json"),
         serde_json::to_vec_pretty(&json!({
             "version": ver,
-            "hosts": std::iter::once(&"m5").chain(remote_hosts()).collect::<Vec<_>>(),
+            "hosts": std::iter::once("m5").chain(remote_hosts()).collect::<Vec<_>>(),
             "source": source["source"],
             "forced": force,
             "interrupted": interrupted,
@@ -1820,6 +1887,7 @@ mod tests {
             backup: dir.join("backup"),
             launcher,
             runtime: PathBuf::from("/new"),
+            state: dir.join("service-state.json"),
         }
     }
     #[test]
@@ -1874,6 +1942,37 @@ mod tests {
                 "verify 1.0.0-preview.20260101.1"
             ]
         );
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn a_launcher_service_switches_its_active_version_and_rolls_it_back() {
+        let dir = temporary("launcher-state");
+        let db = run_database(&dir);
+        let paths = switch_fixture(&dir, &db);
+        let old = r#"{"protocol":4,"activeVersion":"1.0.0-preview.20260101.1"}"#;
+        fs::write(&paths.state, old).unwrap();
+        let active = |paths: &SwitchPaths| -> Value {
+            serde_json::from_str::<Value>(&fs::read_to_string(&paths.state).unwrap()).unwrap()
+        };
+        let control = |bad_version| FakeService {
+            db: db.clone(),
+            bad_version,
+            stuck_stop: false,
+            log: Default::default(),
+        };
+        let bad = "2.0.0-preview.20260101.1";
+        assert!(switch_service(bad, &paths, &control(bad)).is_err());
+        assert_eq!(fs::read_to_string(&paths.state).unwrap(), old);
+        let good = "3.0.0-preview.20260101.1";
+        switch_service(good, &paths, &control("")).unwrap();
+        assert_eq!(active(&paths), json!({"protocol":4,"activeVersion":good}));
+        // A launcher mid-update owns the selection; overwriting it would strand that update.
+        fs::write(
+            &paths.state,
+            r#"{"protocol":4,"activeVersion":"3.0.0-preview.20260101.1","update":{"status":"pending"}}"#,
+        )
+        .unwrap();
+        assert!(switch_service("4.0.0-preview.20260101.1", &paths, &control("")).is_err());
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]

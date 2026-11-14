@@ -108,7 +108,7 @@ lost leases and registry errors stop writes to that scope. See
 
 For web-only changes on M5, use `scripts/fork-deploy ui` and reload the window; CLI versions and active servers stay unchanged.
 For server, shared-contract or dependency changes, rebuild and install through `scripts/fork-deploy fleet --version <unique-preview-version> --upstream-tag <exact-upstream-tag>`.
-It stages and verifies M5, M3 and J together before switching the desktop app.
+It stages and verifies M5, M3, J and K together before switching the desktop app.
 Do not install a separately versioned desktop or omit the SSH `.install-complete` marker.
 Keep the local persistent signing identity in ignored `.env.local` and preserve T3 Connect configuration.
 See [fleet rollout](docs/operations/fork-fleet.md).
