@@ -57,6 +57,7 @@ import {
   SidebarProvider,
   SidebarRail,
   SidebarTrigger,
+  useMobileSidebarSheetMounted,
   useSidebar,
   useSidebarVisibility,
 } from "./ui/sidebar";
@@ -316,7 +317,8 @@ function SidebarControl({ showSidebar }: { readonly showSidebar: boolean }) {
   const router = useRouter();
   const usagePageOpen = useLocation({ select: (location) => location.pathname === "/usage" });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const { toggleSidebar, isMobile, mobileSheetMounted } = useSidebar();
+  const { toggleSidebar, isMobile } = useSidebar();
+  const mobileSidebarSheetMounted = useMobileSidebarSheetMounted();
   const isSidebarVisible = useSidebarVisibility();
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const stageBackdropVariant = useSidebarStageBackdropVariant(environmentIdentificationMode);
@@ -381,7 +383,7 @@ function SidebarControl({ showSidebar }: { readonly showSidebar: boolean }) {
         isSidebarVisible && !isMobile
           ? "left-[calc(var(--sidebar-width)-var(--workspace-titlebar-control-size)-0.5rem)]"
           : "left-[var(--workspace-controls-left)] ml-px",
-        isMobile && mobileSheetMounted && "hidden",
+        mobileSidebarSheetMounted && "hidden",
         "[[data-slot=sidebar-wrapper]:has([data-sidebar-search-expanded])_&]:hidden",
       )}
       data-sidebar-control=""
