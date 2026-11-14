@@ -438,17 +438,23 @@ fn service_path() -> Result<PathBuf> {
 }
 fn service_with_version(original: &str, ver: &str) -> Result<(String, String)> {
     let marker = "/runtime/versions/";
-    if original.matches(marker).count() != 1 {
-        return Err("Expected exactly one managed executable".into());
+    // A launcher service also names its version in the PATH it sets.
+    let versions: Vec<&str> = original
+        .match_indices(marker)
+        .map(|(index, _)| {
+            let rest = &original[index + marker.len()..];
+            let end = rest
+                .find(|c: char| !(c.is_ascii_alphanumeric() || ".-+".contains(c)))
+                .unwrap_or(rest.len());
+            &rest[..end]
+        })
+        .collect();
+    let previous = *versions.first().ok_or("Expected a managed executable")?;
+    if previous.is_empty() || versions.iter().any(|version| *version != previous) {
+        return Err("Expected one managed version".into());
     }
-    let start = original.find(marker).unwrap() + marker.len();
-    let end = start
-        + original[start..]
-            .find('/')
-            .ok_or("Invalid service executable")?;
-    let mut replacement = original.to_owned();
-    replacement.replace_range(start..end, ver);
-    Ok((replacement, original[start..end].to_owned()))
+    let replacement = original.replace(&format!("{marker}{previous}"), &format!("{marker}{ver}"));
+    Ok((replacement, previous.to_owned()))
 }
 trait ServiceControl {
     fn stop(&self) -> Result<()>;
@@ -1635,6 +1641,12 @@ mod tests {
             (service.to_string(), "1.2.3".to_string())
         );
         assert_ne!(service_with_version(service, "1.2.4").unwrap().0, service);
+        let launcher = "<string>/u/.t3/runtime/versions/1.2.3/t3</string>\n<string>/bin:/u/.t3/runtime/versions/1.2.3:/usr/bin</string>";
+        assert_eq!(
+            service_with_version(launcher, "1.2.4").unwrap(),
+            (launcher.replace("1.2.3", "1.2.4"), "1.2.3".to_string())
+        );
+        assert!(service_with_version(&launcher.replacen("1.2.3", "1.2.2", 1), "1.2.4").is_err());
     }
     #[test]
     fn only_a_live_t3_server_named_by_the_runtime_record_is_stopped() {
