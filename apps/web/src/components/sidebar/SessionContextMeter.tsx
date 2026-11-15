@@ -70,12 +70,14 @@ export function SessionContextMeter({
   const retainedNativeUsage = useRetainedValue(contextKey, nativeUsage);
   const retainedProvider = useRetainedValue(contextKey, providerThread ?? null);
   const retainedLive = deriveLatestContextWindowSnapshot([], retainedNativeUsage, retainedProvider);
-  const reported = context
-    ? deriveLatestContextWindowSnapshot([], null, {
-        contextUsage: context.usage,
-        updatedAt: DateTime.makeUnsafe(context.updatedAt),
-      })
-    : null;
+  const reported =
+    context && thread.activeProviderThreadId
+      ? deriveLatestContextWindowSnapshot([], null, {
+          id: thread.activeProviderThreadId,
+          contextUsage: context.usage,
+          updatedAt: DateTime.makeUnsafe(context.updatedAt),
+        })
+      : null;
   const usage =
     retainedLive &&
     (!reported || Date.parse(retainedLive.updatedAt) > Date.parse(reported.updatedAt))

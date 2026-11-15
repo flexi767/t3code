@@ -48,6 +48,16 @@ export function startsNewWork(
   command: OrchestrationV2ServerCommand,
   events: ReadonlyArray<Pick<OrchestrationV2DomainEvent, "type">>,
 ): boolean {
+  if (command.type === "thread.create") {
+    return (
+      command.initialMessage !== undefined &&
+      events.some((event) => event.type === "run.created") &&
+      firstMessageStartsNewWork({
+        creationSource: command.creationSource,
+        senderThreadId: command.initialMessage.senderThreadId,
+      })
+    );
+  }
   return (
     command.type === "message.dispatch" &&
     events.some((event) => event.type === "run.created") &&

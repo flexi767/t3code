@@ -332,6 +332,8 @@ const make = Effect.gen(function* () {
     const importedThreadIds = new Set<ThreadId>();
     let importedCount = 0;
     let skippedCount = 0;
+    // Progress covers every session read, including ones already imported or only refreshed.
+    let processedCount = 0;
     let lastReportedAt = Number.NEGATIVE_INFINITY;
     const reportProgress =
       onProgress === undefined
@@ -340,13 +342,14 @@ const make = Effect.gen(function* () {
             const now = yield* Clock.currentTimeMillis;
             if (now - lastReportedAt < IMPORT_PROGRESS_INTERVAL_MS) return;
             lastReportedAt = now;
-            yield* onProgress(importedCount + skippedCount);
+            yield* onProgress(processedCount);
           });
 
     yield* Stream.runForEach(outcomes, (outcome) =>
       Effect.gen(function* () {
         if (outcome._tag === "Skipped") {
           skippedCount += 1;
+          processedCount += 1;
           return;
         }
         const source = outcome.source;
@@ -355,7 +358,7 @@ const make = Effect.gen(function* () {
         );
         if (outcome._tag === "AlreadyImported") {
           importedThreadIds.add(threadId);
-          importedCount += 1;
+          processedCount += 1;
           return;
         }
         if (outcome._tag === "Duplicate") {
@@ -445,7 +448,8 @@ const make = Effect.gen(function* () {
             }
             yield* persistRuntime;
             yield* runtimes.recordImportedTranscript({ threadId, source });
-            return true;
+            importedThreadIds.add(threadId);
+            return null;
           }
 
           const model = thread.model ?? DEFAULT_MODEL_BY_PROVIDER[driver] ?? DEFAULT_MODEL;
@@ -586,6 +590,7 @@ const make = Effect.gen(function* () {
             }).pipe(Effect.as(false)),
           ),
         );
+        processedCount += 1;
         if (imported === true) {
           importedThreadIds.add(threadId);
           importedCount += 1;

@@ -80,10 +80,12 @@ import {
   resolveThreadListV2SnoozeMenuSelection,
   resolveThreadListV2SnoozePresets,
   threadHasUnseenCompletion,
+  resolveThreadListV2RowStatus,
   resolveThreadListV2Status,
   resolveThreadListV2ProviderDrivers,
   resolveThreadListV2SwipeActions,
   layoutThreadListV2RowMenuActions,
+  threadListV2RowAccessibilityLabel,
   type ThreadListV2Status,
 } from "./threadListV2";
 import { QueuedMessageIcon } from "./queued-message-icon";
@@ -379,7 +381,6 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
   readonly pendingTask: PendingNewTask;
   readonly selected?: boolean;
   readonly project: EnvironmentProject | null;
-  readonly projectTitle?: string;
   readonly environmentLabel: string | null;
   readonly environmentMachine?: EnvironmentMachineKind;
   readonly pane?: "screen" | "sidebar";
@@ -426,7 +427,6 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
     }),
     [deleteLabel, handleDelete, pendingTask.title],
   );
-  const projectTitle = props.projectTitle ?? props.project?.title ?? pendingTask.projectTitle ?? "";
   const projectCwd = props.project?.workspaceRoot || null;
   // Drafts only; the reads are shared per-project atoms, and queued rows skip them.
   const projectDefaults = useNewTaskProjectDefaults(isDraft ? props.project : null);
@@ -468,7 +468,7 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
               faviconPath={props.project.faviconPath}
               projectIcon={props.project.projectIcon}
               size={projectIconSize}
-              projectTitle={projectTitle}
+              projectTitle={props.project.title}
               workspaceRoot={props.project.workspaceRoot}
             />
           </View>
@@ -774,7 +774,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const selected = props.selected === true;
   const rowAppearance = getThreadListV2RowAppearance(theme, sidebarPane, selected);
 
-  const status = resolveThreadListV2Status(thread);
+  const rawStatus = resolveThreadListV2Status(thread);
+  const status = resolveThreadListV2RowStatus(thread);
   const isUnread = status === "ready" && threadHasUnseenCompletion(thread);
   const workingLabel = STATUS_LABEL_BY_STATUS[status];
   const showsWoke = status === "ready" && props.wokeAt !== null;
@@ -784,8 +785,20 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       : workingLabel) ?? (isUnread ? DONE_STATUS_LABEL : undefined);
   const recede = shouldRecedeThreadRow({ status, selected });
   const isRegeneratingTitle = thread.titleRegeneration != null;
-  const rowAccessibilityLabel = `${thread.title}${providerNameLabel ? `, ${providerNameLabel}` : ""}${props.hasQueuedMessages ? ", messages queued to send" : ""}${isRegeneratingTitle ? ", regenerating title" : ""}`;
   const timeLabel = props.timeLabel;
+  const rowAccessibilityLabel = threadListV2RowAccessibilityLabel({
+    title: thread.title,
+    variant,
+    woke: showsWoke,
+    // Working and waiting rows show only an icon and a duration, so name them for speech.
+    statusLabel:
+      statusLabel && (statusLabel.label ?? (status === "waiting" ? "Waiting" : "Working")),
+    timeLabel,
+    snoozeWakeLabel: snoozedRow ? props.snoozeWakeLabelText : undefined,
+    providerNameLabel,
+    hasQueuedMessages: props.hasQueuedMessages === true,
+    regeneratingTitle: isRegeneratingTitle,
+  });
 
   const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
   const handleAcknowledgeWoke = useCallback(() => {
@@ -1304,7 +1317,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         </View>
       ) : null}
       <View className="mt-1 flex-row items-center gap-2" style={{ paddingLeft: titleTextInset }}>
-        {(status === "failed" || status === "limited") && thread.runtime?.lastError ? (
+        {(rawStatus === "failed" || rawStatus === "limited") && thread.runtime?.lastError ? (
           <Text
             className={cn(
               "flex-1 text-xs",
@@ -1585,7 +1598,12 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         threadTitle={thread.title}
       >
         {(close) => (
-          <Menu actions={menuActions} onPressAction={handleMenuAction} shouldOpenOnLongPress>
+          <Menu
+            accessibilityLabel={rowAccessibilityLabel}
+            actions={menuActions}
+            onPressAction={handleMenuAction}
+            shouldOpenOnLongPress
+          >
             {rowContent(close)}
           </Menu>
         )}

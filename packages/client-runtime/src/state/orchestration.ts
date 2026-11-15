@@ -43,7 +43,7 @@ import { exportThreadMove, importThreadMove, finishThreadMove } from "./threadMo
 export function createOrchestrationEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | HttpClient.HttpClient | R, E>,
   options: {
-    /** Re-checks `threadTitles` when one of their threads leaves the shell. */
+    /** Re-checks `threadTitles` when one of their threads leaves the shell, and the archive on any removal. */
     readonly shellState?: (
       environmentId: EnvironmentId,
     ) => Atom.Atom<Pick<EnvironmentShellState, "removedAt">>;
@@ -283,12 +283,19 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
     threadSearch: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:orchestration:thread-search",
       tag: ORCHESTRATION_V2_WS_METHODS.searchThreads,
-      staleTimeMs: 30_000,
-      idleTtlMs: 60_000,
+      staleTimeMs: 0,
+      idleTtlMs: 0,
     }),
     archivedShellSnapshot: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:orchestration:archived-shell-snapshot",
       tag: ORCHESTRATION_V2_WS_METHODS.getArchivedShellSnapshot,
+      // The shell reports archiving a thread, and deleting or changing an archived one, as a removal,
+      // and replaces `removedAt` on each one.
+      refreshTrigger: ({ environmentId }) => {
+        if (shellState === undefined) return undefined;
+        const state = shellState(environmentId);
+        return Atom.make((get) => get(state).removedAt);
+      },
     }),
     threadFamily: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:orchestration:thread-family-for-delete",
