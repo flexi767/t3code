@@ -599,6 +599,16 @@ export default defineConfig({
         rules: { "t3code/no-untranslated-copy": "error" },
       },
       {
+        // Fork-only UI stays English, so its strings add no keys to upstream's locale files.
+        files: [
+          "apps/mobile/src/features/threads/use-move-thread-machine.ts",
+          "apps/web/src/components/MoveThreadDialog.tsx",
+          "apps/web/src/components/chat/ContextWindowMeter.{logic.ts,tsx}",
+          "apps/web/src/components/sidebar/{SessionContextMeter,SessionUsageBadge,SessionWorkspaceBadge,SidebarThreadFilters,ThreadMachineTransfer}.tsx",
+        ],
+        rules: { "t3code/no-untranslated-copy": "off" },
+      },
+      {
         // React Compiler owns memoization; upstream rules do not ban redundant useMemo/useCallback.
         files: ["apps/web/src/**/*.{ts,tsx}"],
         rules: {

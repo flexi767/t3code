@@ -1340,7 +1340,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   );
   const metaLine = metaLineEmpty ? null : (
     <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-secondary-label text-xs">
-      <span className="flex min-w-0 flex-1">{workspaceIndicators}</span>
+      <span className="flex min-w-0 flex-1 overflow-hidden">{workspaceIndicators}</span>
       {terminalStatusIcon}
       {prBadge}
       {issueBadge}

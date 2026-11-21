@@ -1,3 +1,4 @@
+import { T, useGT } from "gt-react";
 import { useLayoutEffect, useRef, useState, type ComponentProps, type CSSProperties } from "react";
 import { useStore } from "zustand";
 import { ChatCanvasContext } from "./ChatCanvasContext";
@@ -62,6 +63,7 @@ export function ChatCanvas({
   composerOverlayElement: HTMLElement | null;
   detailsCardTopInset?: number;
 }) {
+  const gt = useGT();
   const elementRef = useRef<HTMLDivElement | null>(null);
   const widthProbeRef = useRef<HTMLDivElement | null>(null);
   const [timelineElement, registerTimeline] = useState<HTMLElement | null>(null);
@@ -206,7 +208,7 @@ export function ChatCanvas({
             render={
               <div
                 role="separator"
-                aria-label="Resize conversation"
+                aria-label={gt("Resize conversation")}
                 aria-orientation="vertical"
                 aria-valuemin={640}
                 aria-valuemax={maxHalfWidth * 2}
@@ -229,7 +231,9 @@ export function ChatCanvas({
               className="pointer-events-none absolute inset-y-0 left-1/2 w-px bg-transparent group-hover:bg-border group-focus-visible:bg-primary/60 group-active:bg-primary/60"
             />
           </TooltipTrigger>
-          <TooltipPopup>Drag to resize conversation</TooltipPopup>
+          <TooltipPopup>
+            <T>Drag to resize conversation</T>
+          </TooltipPopup>
         </Tooltip>
       </div>
     </ChatCanvasContext>
