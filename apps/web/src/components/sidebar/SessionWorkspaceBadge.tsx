@@ -71,6 +71,7 @@ function CheckoutDetails({
           <div className="col-span-2 -mx-2.5 [&_button]:gap-2 [&_button>svg:first-child]:size-3">
             <GitActionsControl
               gitCwd={cwd}
+              name={heading}
               activeThreadRef={threadRef}
               menuOnlyLabel={behindLabel}
               showChanges={false}
@@ -79,6 +80,7 @@ function CheckoutDetails({
             {status?.hasWorkingTreeChanges && onOpenChanges ? (
               <GitActionsControl
                 gitCwd={cwd}
+                name={heading}
                 activeThreadRef={threadRef}
                 showActions={false}
                 onOpenChanges={onOpenChanges}

@@ -65,6 +65,8 @@ import * as ThreadForkService from "./ThreadForkService.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+import * as WorkspaceFolders from "../workspace/WorkspaceFolders.ts";
+import * as TaskFolderStore from "../workspace/TaskFolderStore.ts";
 
 const layerAgentHolders = AgentHolders.layer.pipe(
   Layer.provide(ProviderContinuationRequests.layer),
@@ -78,7 +80,12 @@ export const layerEventInfrastructure = Layer.mergeAll(
   OrchestrationCommandReceipts.layer,
 );
 
+const layerWorkspaceFoldersProvided = WorkspaceFolders.layer.pipe(
+  Layer.provide(Layer.merge(ProjectStore.layer, TaskFolderStore.layer)),
+);
+
 const layerRuntimePolicyProvided = RuntimePolicy.layerFromProjectStore.pipe(
+  Layer.provide(layerWorkspaceFoldersProvided),
   Layer.provide(ProjectStore.layer),
 );
 
@@ -135,7 +142,7 @@ const layerProviderEventIngestorProvided = ProviderEventIngestor.layer.pipe(
 );
 
 const layerCheckpointServiceProvided = CheckpointService.layer.pipe(
-  Layer.provide(IdAllocator.layer),
+  Layer.provide(Layer.merge(IdAllocator.layer, layerWorkspaceFoldersProvided)),
 );
 const layerContextHandoffServiceProvided = ContextHandoffService.layer.pipe(
   Layer.provide(IdAllocator.layer),
@@ -251,6 +258,7 @@ const layerOrchestratorProvided = Orchestrator.layer.pipe(
       layerContextHandoffServiceProvided,
       IdAllocator.layer,
       ProjectStore.layer,
+      TaskFolderStore.layer,
       layerAdapterRegistry,
       // Reuse the continuation worker's layer reference so memoization shares one request queue.
       ProviderContinuationRequests.layer,
