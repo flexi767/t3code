@@ -8,6 +8,7 @@ import { SessionWorkspaceBadge, SessionWorkspaceDetails } from "./SessionWorkspa
 import { SessionContextMeter } from "./SessionContextMeter";
 import { ThreadTerminalStatusButton } from "../ThreadStatusIndicators";
 import { discardComposerDraft } from "../../lib/discardComposerDraft";
+import { formatWorktreePathForDisplay } from "../../worktreeCleanup";
 import { contextMenuSourceOf } from "../../contextMenuSource";
 import { requestCustomSnooze } from "../CustomSnoozeDialog";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
@@ -53,6 +54,7 @@ import {
   CircleDotDashedIcon,
   ChevronDownIcon,
   ClockIcon,
+  FolderGit2Icon,
   MessageCircleQuestionIcon,
   PinIcon,
   PinOffIcon,
@@ -291,6 +293,7 @@ function SidebarThreadTooltip({
   onThreadActivate: (threadRef: ScopedThreadRef) => void;
 }) {
   const driverKind = providerEntry?.driverKind ?? null;
+  const worktreePath = thread.worktreePath?.trim();
   const previousProviderNames = thread.providerInstanceHistory
     .filter((instanceId) => instanceId !== modelInstanceId)
     .map((instanceId) => providerEntryByInstanceId.get(instanceId)?.displayName ?? instanceId);
@@ -329,6 +332,12 @@ function SidebarThreadTooltip({
             working={thread.runtime?.activeRunId != null}
             detail
           />
+        ) : null}
+        {worktreePath ? (
+          <div className="flex min-w-0 items-center gap-2">
+            <FolderGit2Icon className="size-3 shrink-0 stroke-muted-foreground" />
+            <MiddleTruncate value={formatWorktreePathForDisplay(worktreePath)} className="flex" />
+          </div>
         ) : null}
         {branchMismatch ? (
           <div className="flex min-w-0 items-start gap-2 text-warning">
@@ -582,7 +591,7 @@ function TopStatusIcon(props: { icon: keyof typeof TOP_STATUS_ICONS; className: 
 type SidebarThreadRowProps = {
   thread: SidebarThreadSummary;
   // "folder" is a one-line row inside a boring sidebar project folder;
-  // "folder-multiline" adds the card's branch and PR line under it.
+  // "folder-multiline" adds the card's environment and PR line under it.
   variant: "card" | "slim" | "folder" | "folder-multiline";
   navigationParent?: string | undefined;
   variantAction: SidebarSweepAction;
@@ -612,10 +621,8 @@ type SidebarThreadRowProps = {
   // Read at click time; a prop would re-render every row on entering or leaving a thread route.
   readOpensPullRequestsInRightPanel: () => boolean;
   jumpLabel: string | null;
-  currentEnvironmentId: string | null;
   environmentLabel: string | null;
   environmentMachine: EnvironmentMachineKind;
-  scratchMachineLabel: string | null;
   project: EnvironmentProject | null;
   projectDisplayName: string | null;
   providerEntryByInstanceId: ReadonlyMap<string, SidebarProviderEntry>;

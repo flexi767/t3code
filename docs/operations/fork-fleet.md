@@ -105,7 +105,7 @@ already on the version is only verified, then restarted once if it doesn't answe
 
 These are the deploy tool's rollbacks. M3 and J run `t3 serve`
 directly, without the launcher described in
-[server updates](../internals/server-updates.md), so its trial boot and rollback
+[server updates](../internals/07_server-updates.md), so its trial boot and rollback
 do not apply here. K's service runs that launcher, which serves the `activeVersion` in
 `~/.t3/runtime/service-state.json` rather than the unit's version, so the switch sets
 and restores that field with the unit. It refuses while the launcher has an update in progress.
