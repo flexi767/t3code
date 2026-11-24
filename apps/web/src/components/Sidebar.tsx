@@ -81,6 +81,7 @@ import {
   ChevronDownIcon,
   FolderIcon,
   FolderPlusIcon,
+  ListFilterIcon,
   PlusIcon,
   SettingsIcon,
 } from "lucide-react";

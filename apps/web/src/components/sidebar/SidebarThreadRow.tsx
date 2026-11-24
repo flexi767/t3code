@@ -132,6 +132,7 @@ import { useThreadRunningTerminalIds } from "../../state/terminalSessions";
 import { InlineButton } from "../ui/button";
 import { Kbd } from "../ui/kbd";
 import { Menu, MenuItem, MenuItemDetail, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
+import { MiddleTruncate } from "../ui/middle-truncate";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ActivityShimmerOverlay } from "../chat/TimelineRowParts";
 import { observeVisibleAnimation } from "~/lib/visibleAnimation";
