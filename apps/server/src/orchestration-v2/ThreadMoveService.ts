@@ -239,9 +239,18 @@ const make = Effect.gen(function* () {
       if (seen.has(id)) continue;
       seen.add(id);
       yield* threads.ensureLegacyTranscript(id).pipe(failed("Could not load saved history."));
-      const snapshot = yield* threads
-        .getThreadSnapshot(id)
-        .pipe(failed("Could not export the full thread."));
+      const snapshot = yield* threads.getThreadSnapshot(id).pipe(
+        // Snapshot reads hide deleted threads; a deleted ancestor still travels as linked history.
+        Effect.catch((error) =>
+          id === input.threadId
+            ? Effect.fail(error)
+            : Effect.all({
+                projection: threads.getThreadProjection(id),
+                snapshotSequence: store.latestSequence({ threadId: id }),
+              }),
+        ),
+        failed("Could not export the full thread."),
+      );
       const { snapshotSequence } = snapshot;
       const projection = localMoveProjection(snapshot.projection);
       if (selected.has(id) && id !== input.threadId && projection.thread.deletedAt !== null)
