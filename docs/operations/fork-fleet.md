@@ -10,7 +10,7 @@ revisions live in `~/.t3/ui/<desktop-version>/revision.json`, independently of t
 server version. Previous entry pages are kept in `~/.t3/ui/<desktop-version>/backups`.
 Delete `~/.t3/ui/<desktop-version>/client` and reload to return to the bundled UI.
 
-M5 runs the signed desktop app. M3, J and K run managed server services. All four
+M5 runs the signed desktop app. M3, J, K and R run managed server services. All five
 must have the desktop's exact CLI version installed: SSH otherwise tries to
 download that version from public releases, where private fork builds do not exist.
 
@@ -73,7 +73,7 @@ variable this check reads; from another provider's turn, always use `--detach`.
 Never wrap activation in `launchctl submit`: submitted jobs are KeepAlive, so the
 activator reruns every 10 seconds, even after it succeeds, and each rerun can quit the app.
 
-If M3 or K is unreachable, `T3CODE_FLEET_SKIP_M3=1` or `T3CODE_FLEET_SKIP_K=1` leaves it out.
+If M3, K or R is unreachable, `T3CODE_FLEET_SKIP_M3=1`, `T3CODE_FLEET_SKIP_K=1` or `T3CODE_FLEET_SKIP_R=1` leaves it out.
 The desktop cannot connect to a skipped host until a later rollout, with a new version, reaches it.
 
 ## Keeping agents running through a switch
@@ -106,7 +106,7 @@ already on the version is only verified, then restarted once if it doesn't answe
 These are the deploy tool's rollbacks. M3 and J run `t3 serve`
 directly, without the launcher described in
 [server updates](../internals/07_server-updates.md), so its trial boot and rollback
-do not apply here. K's service runs that launcher, which serves the `activeVersion` in
+do not apply here. K's and R's services run that launcher, which serves the `activeVersion` in
 `~/.t3/runtime/service-state.json` rather than the unit's version, so the switch sets
 and restores that field with the unit. It refuses while the launcher has an update in progress.
 
@@ -117,7 +117,7 @@ unresponsive connections instead of leaving a transfer hanging indefinitely.
 M5 uploads both runtime packages to J. M3 pulls its Mac package and the staging
 helper from J using its existing `j` SSH alias. Each final host verifies its
 archive SHA-256 before staging. M5 never sends the large package directly to M3.
-K, on M5's LAN, receives the Linux package directly from M5.
+K, on M5's LAN, receives the Linux package directly from M5. R, a remote server, gets it from J's copy.
 Transfers use compressed, whole-file rsync: delta updates of the cached tar have
 failed verification between these hosts. The complete tar checksum is checked
 before staging on each final host. Staged archives are deleted from `/tmp`, which
@@ -129,8 +129,8 @@ app; browser and mobile preferences can override defaults on each device.
 
 The launcher compiles `native/fork-deploy` with the locked Rust dependencies.
 Full fleet updates send the small Rust crate M5 → J → M3 and compile its host
-commands with each host's already-installed toolchain. K has no Rust toolchain and
-gets the helper J compiled. No Python runtime is used.
+commands with each host's already-installed toolchain. K and R have no Rust toolchain and
+get the helper J compiled. No Python runtime is used.
 Focused helper tests: `cargo test --locked --manifest-path native/fork-deploy/Cargo.toml`.
 
 Backups of the database, previous service definitions and M5's app are under

@@ -668,12 +668,13 @@ fn verify(ver: &str) -> Result<()> {
         thread::sleep(Duration::from_secs(2));
     }
 }
-// An unreachable M3 or K can be left behind; its next rollout must use a new version.
+// An unreachable M3, K or R can be left behind; its next rollout must use a new version.
 fn remote_hosts() -> Vec<&'static str> {
     [
         ("m3", "T3CODE_FLEET_SKIP_M3"),
         ("j", ""),
         ("k", "T3CODE_FLEET_SKIP_K"),
+        ("r", "T3CODE_FLEET_SKIP_R"),
     ]
     .into_iter()
     .filter(|(_, skip)| skip.is_empty() || env::var_os(skip).is_none())
@@ -681,7 +682,9 @@ fn remote_hosts() -> Vec<&'static str> {
     .collect()
 }
 /// Linux hosts without a Rust toolchain run the helper J compiled.
-const HELPER_FROM_J: &[&str] = &["k"];
+const HELPER_FROM_J: &[&str] = &["k", "r"];
+/// Hosts off M5's LAN take the Linux package from J's copy instead of M5's uplink.
+const PACKAGE_FROM_J: &[&str] = &["r"];
 fn route(host: &str) -> String {
     if host == "m3" {
         env::var("T3CODE_FLEET_M3_SSH_HOST").unwrap_or_else(|_| host.into())
@@ -811,6 +814,16 @@ fn distribute(ver: &str, builds: &Path, stage_only: bool, activation: Activation
                         "rsync -azc --whole-file --partial --inplace -e {} {} /tmp/",
                         quote(transport),
                         quote(&format!("j:{destination}"))
+                    ),
+                )?;
+            } else if PACKAGE_FROM_J.contains(&host) {
+                ssh(
+                    "j",
+                    &format!(
+                        "rsync -azc --whole-file --partial --inplace -e {} {} {}",
+                        quote(transport),
+                        quote(&destination),
+                        quote(&format!("{host}:{destination}"))
                     ),
                 )?;
             } else if host != "j" {
