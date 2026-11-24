@@ -66,6 +66,7 @@ export function ChatCanvas({
   const gt = useGT();
   const elementRef = useRef<HTMLDivElement | null>(null);
   const widthProbeRef = useRef<HTMLDivElement | null>(null);
+  const htmlPreviewWidthProbeRef = useRef<HTMLDivElement | null>(null);
   const [timelineElement, registerTimeline] = useState<HTMLElement | null>(null);
   const measurements = useStore(store, (state) => state.measurements);
   const chatWidth = useClientSettings((settings) => settings.chatWidth);
@@ -89,7 +90,8 @@ export function ChatCanvas({
   useLayoutEffect(() => {
     const element = elementRef.current;
     const probe = widthProbeRef.current;
-    if (!element || !probe) return;
+    const htmlPreviewProbe = htmlPreviewWidthProbeRef.current;
+    if (!element || !probe || !htmlPreviewProbe) return;
     const findBar =
       detailsCardTopInset > 0 ? element.querySelector<HTMLElement>("[data-thread-find-bar]") : null;
     let disposed = false;
@@ -137,6 +139,7 @@ export function ChatCanvas({
         height: element.clientHeight,
         padding: Number.parseFloat(styles.paddingLeft),
         maxChatWidth: Number.parseFloat(styles.width),
+        maxHtmlPreviewWidth: Number.parseFloat(getComputedStyle(htmlPreviewProbe).width),
         minChatWidth: Number.parseFloat(styles.minWidth),
         composerHeight: composerOverlayElement?.getBoundingClientRect().height ?? 0,
         timelineGutter: timelineElement
@@ -145,7 +148,7 @@ export function ChatCanvas({
       });
     };
     measure();
-    const observed: Element[] = [element, probe];
+    const observed: Element[] = [element, probe, htmlPreviewProbe];
     if (findBar) observed.push(findBar);
     if (composerOverlayElement) observed.push(composerOverlayElement);
     if (timelineElement) observed.push(timelineElement);
@@ -179,6 +182,13 @@ export function ChatCanvas({
     detailsCardPlacement: model.detailsCardPlacement,
   };
   const { layout } = context;
+  const htmlPreviewLane =
+    layout.htmlPreview.width > layout.chat.width
+      ? {
+          "--html-preview-lane-offset": `${layout.htmlPreview.left - layout.chat.left}px`,
+          "--html-preview-lane-width": `${layout.htmlPreview.width}px`,
+        }
+      : null;
   return (
     <ChatCanvasContext value={context}>
       <div
@@ -194,6 +204,7 @@ export function ChatCanvas({
             "--chat-content-max-width": "calc(var(--resizable-width) * 2)",
             "--chat-lane-inset-start": `${layout.chat.insetStart}px`,
             "--chat-lane-inset-end": `${layout.chat.insetEnd}px`,
+            ...htmlPreviewLane,
           } as CSSProperties
         }
       >
@@ -201,6 +212,11 @@ export function ChatCanvas({
           ref={widthProbeRef}
           aria-hidden
           className="pointer-events-none invisible absolute h-0 w-(--chat-content-max-width) min-w-[40rem] box-content ps-3 sm:ps-12"
+        />
+        <div
+          ref={htmlPreviewWidthProbeRef}
+          aria-hidden
+          className="pointer-events-none invisible absolute h-0 w-(--html-preview-max-width)"
         />
         {children}
         <Tooltip>
