@@ -693,7 +693,7 @@ export interface RunExecutionServiceV2StartRootRunInput {
 type RunBaselineInput = Pick<
   RunExecutionServiceV2StartRootRunInput,
   "appThread" | "run" | "checkpointScope"
->;
+> & { readonly sourceOrdinalWithinScope?: number | undefined };
 
 export interface RunExecutionServiceV2Shape {
   readonly startRootRun: (
@@ -1106,6 +1106,7 @@ export const layer: Layer.Layer<
         .captureBaseline({
           scope: input.checkpointScope,
           ordinalWithinScope: Math.max(0, input.run.ordinal - 1),
+          sourceOrdinalWithinScope: input.sourceOrdinalWithinScope,
           thread: input.appThread,
         })
         .pipe(
@@ -1114,7 +1115,7 @@ export const layer: Layer.Layer<
               ? Effect.interrupt
               : Effect.logWarning(
                   "orchestration V2 checkpoint baseline capture failed; starting provider without a baseline",
-                  { runId: input.run.id },
+                  { runId: input.run.id, cause },
                 ),
           ),
         );
